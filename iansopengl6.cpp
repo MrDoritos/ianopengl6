@@ -42,6 +42,8 @@ float lastFrame = 0.0f;
 GLint uniModel;
 GLint uniView;
 GLuint shaderProgram;
+GLuint textureId;
+GLuint textureWireframeId;
 GLFWmonitor* monitor = glfwGetPrimaryMonitor();
 void key_callback(GLFWwindow* window);
 void key_frame(GLFWwindow* window);
@@ -369,6 +371,11 @@ int map[2][3][2] = {
 game_t currentGame;
 int drawen_buffers;
 
+const int minimum_octree_size = 2;
+const int minimum_block_width = 8;
+const int minimum_render_octree = 3;
+const int maximum_octree_size = 6;
+
 struct octree_chunk_t : public blockaccessor_t {
     fullblock_t getBlockAtAbsolute(vec3d pos) override {
         int width = getBlockWidth(size);
@@ -454,14 +461,16 @@ struct octree_chunk_t : public blockaccessor_t {
         info_count = 0;
         this->position = _position;
 
-        if (size >= 2) { //If 4x4x4 and above, we hold blocks and can render individually
+        if (size >= minimum_octree_size) { //If 4x4x4 and above, we hold blocks and can render individually
             glGenBuffers(1, &vbo);
             glGenVertexArrays(1, &vao);
             is_meshable = true;
         }
-        if (size == 2) { //If 4x4x4, we hold blocks
-            point = new blockstate_t[64];
-            memset(point, 0, sizeof(*point) * 64);
+        if (size == minimum_octree_size) { //If 4x4x4, we hold blocks
+            int width = getBlockWidth(size);
+            int volume = pow(width, 3);
+            point = new blockstate_t[volume];
+            memset(point, 0, sizeof(*point) * volume);
             blockstate_t state = block_t::stone->getDefaultState();
             //point[0] = block_t::stone->getDefaultState();
             //point[0] = block_t::stone->getDefaultState();
@@ -477,7 +486,7 @@ struct octree_chunk_t : public blockaccessor_t {
             //point[63] = state;
             generate();
         }
-        if (size > 2) { //All sizes above 4x4x4 create children
+        if (size > minimum_octree_size) { //All sizes above 4x4x4 create children
             generate_children();
         }
     }
@@ -523,16 +532,17 @@ struct octree_chunk_t : public blockaccessor_t {
     static const int info_max = 800000;
 
     static int getBlockWidth(int size) {
-        return int(pow(2,size));        
+        float fact = float(minimum_block_width) / pow(2, 2);
+        return int(pow(2,size)) * fact;        
     }
 
     bool needsToRender() {
-        if (!is_meshable || !children || size < 3)
+        if (!is_meshable || !children || size < minimum_render_octree)
             return false;
         //return true;
         float scale = 0.1f;
         float threshold = scale * size;
-        threshold = std::cbrt(pow(8, size)) * 4;
+        threshold = getBlockWidth(size) * 4;
         float dist = 
         sqrtf(((cameraPos.x - position.x) * (cameraPos.x - position.x)) +
               ((cameraPos.y - position.y) * (cameraPos.y - position.y)) +
@@ -591,14 +601,24 @@ struct octree_chunk_t : public blockaccessor_t {
         //}
 
         bool childRendered = false;
+        bool childNeedLOD = false;
         for (int i = 0; i < 8; i++) {
             if (children[i].needsToRender()) {
-                children[i].render();
+                //children[i].render();
                 childRendered = true;
+            } else {
+                childNeedLOD = true;
             }
         }
-        if (childRendered) //For some reason this turns on/off lod
-            return;//return;//return; //If a child rendered, a higher LOD is available and was used, making this size/LOD useless
+
+        if (!childNeedLOD && childRendered) {
+            for (int i = 0; i < 8; i++)
+                children[i].render();
+            return;
+        }
+
+        //if (childRendered) //For some reason this turns on/off lod
+        //    return;//return;//return; //If a child rendered, a higher LOD is available and was used, making this size/LOD useless
 
 
         if (needsMeshed) {
@@ -637,6 +657,66 @@ struct octree_chunk_t : public blockaccessor_t {
 
         if (info_count == 0)
             return;
+
+        int width = getBlockWidth(size);
+            // Calculate the half-width of the cube
+        float halfWidth = width;
+
+        // Calculate the coordinates of the eight vertices of the cube
+        float xMin = position.x;
+        float xMax = position.x + halfWidth;
+        float yMin = position.y;
+        float yMax = position.y + halfWidth;
+        float zMin = position.z;
+        float zMax = position.z + halfWidth;
+
+        // Define the edges of the cube
+        // Each line connects two vertices
+        std::vector<std::pair<glm::vec3, glm::vec3>> edges = {
+            // Bottom face
+            {glm::vec3(xMin, yMin, zMin), glm::vec3(xMax, yMin, zMin)},
+            {glm::vec3(xMin, yMin, zMin), glm::vec3(xMin, yMin, zMax)},
+            {glm::vec3(xMax, yMin, zMin), glm::vec3(xMax, yMin, zMax)},
+            {glm::vec3(xMin, yMin, zMax), glm::vec3(xMax, yMin, zMax)},
+
+            // Top face
+            {glm::vec3(xMin, yMax, zMin), glm::vec3(xMax, yMax, zMin)},
+            {glm::vec3(xMin, yMax, zMin), glm::vec3(xMin, yMax, zMax)},
+            {glm::vec3(xMax, yMax, zMin), glm::vec3(xMax, yMax, zMax)},
+            {glm::vec3(xMin, yMax, zMax), glm::vec3(xMax, yMax, zMax)},
+
+            // Vertical edges
+            {glm::vec3(xMin, yMin, zMin), glm::vec3(xMin, yMax, zMin)},
+            {glm::vec3(xMax, yMin, zMin), glm::vec3(xMax, yMax, zMin)},
+            {glm::vec3(xMin, yMin, zMax), glm::vec3(xMin, yMax, zMax)},
+            {glm::vec3(xMax, yMin, zMax), glm::vec3(xMax, yMax, zMax)},
+        };
+
+        // Use the edges to draw the wireframe cube
+        glBegin(GL_LINES);
+        glBindTexture(GL_TEXTURE_2D, textureWireframeId);
+        for (const auto& edge : edges) {
+            const glm::vec3& v1 = edge.first;
+            const glm::vec3& v2 = edge.second;
+            glVertex3f(v1.x, v1.y, v1.z);
+            glVertex3f(v2.x, v2.y, v2.z);
+        }
+        glEnd();
+/*
+        glBegin(GL_LINES);
+        glBindTexture(GL_TEXTURE_2D, textureWireframeId);
+        // Draw the cube edges
+        glVertex3f(position.x, position.y, position.z);
+        glVertex3f(position.x, position.z, position.z + width);
+        
+        glVertex3f(position.x, position.y, position.z + width);
+        glVertex3f(position.x, position.y + width, position.z + width);
+        
+        // ... Continue adding lines for each edge of the cube
+        glEnd();
+        */
+        glBindTexture(GL_TEXTURE_2D, textureId);
+
         //glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glBindVertexArray(vao);
         //glBindTexture(GL_TEXTURE_2D, textureId);
@@ -658,7 +738,7 @@ struct octree_chunk_t : public blockaccessor_t {
 
 struct world_t : public blockaccessor_t {
     //std::vector<chunk_t*> chunks;
-    octree_chunk_t *chunks = new octree_chunk_t(6, vec3d{0,0,0});
+    octree_chunk_t *chunks = new octree_chunk_t(maximum_octree_size, vec3d{0,0,0});
 
     fullblock_t getBlockAtAbsolute(vec3d pos) override {
         return chunks->getBlockAtAbsolute(pos);
@@ -721,7 +801,7 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                         }
 
         //If we have children that may use their vbos, we either add them to our mesh or let them handle it
-        if (size > 2) {
+        if (size > minimum_octree_size) {
             bool childNotMeshed = true;
             if (has_children) {
                 for (int i = 0; i < 8; i++) {
@@ -738,7 +818,7 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                 return; //If no child contributed to the mesh, we need to draw ourselves
         }
 
-        if (size > 2)
+        if (size > minimum_octree_size)
             return;
 
         //We have blocks that can be meshed
@@ -799,7 +879,8 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                                 }
                             
                                 float factor = (1.0f/16.0f);
-                                float textureAtlas[] = {7*factor,0*factor,8*factor,1*factor};
+                                //float textureAtlas[] = {7*factor,0*factor,8*factor,1*factor};
+                                float textureAtlas[] = {0*factor,0*factor,1*factor,1*factor};
 
                                 draw_buffer[*index].a.x = positionCube3[(l * 9) + (l1 * 3) + 0] + float(x + ofx);
                                 draw_buffer[*index].a.y = positionCube3[(l * 9) + (l1 * 3) + 1] + float(y + ofy);
@@ -846,6 +927,14 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
 
 void start_game() {
     puts("Starting game");
+    printf("minimum_block_width:%i\n", minimum_block_width);
+    printf("map width: %i\n", octree_chunk_t::getBlockWidth(maximum_octree_size));
+    printf("minecraft chunk equivalent: %f\n", octree_chunk_t::getBlockWidth(maximum_octree_size) / 32.0f);
+    for (int i = 2; i < 8; i++) {
+        printf("%i:%i ", i, octree_chunk_t::getBlockWidth(i));
+    }
+    printf("\n");
+    //exit(1);
 
     block_t::air = new air;
     block_t::stone = new stone;
@@ -995,6 +1084,37 @@ int figureOutShaders() {
     //delete fragmentShaderSourcePtr;
 }
 
+int loadTexture(const char* path) {
+    // Load texture using stb_image
+    int width, height, channels;
+    unsigned char* image = stbi_load(path, &width, &height, &channels, 0);
+    if (!image) {
+        std::cout << "Failed to load texture" << std::endl;
+        glfwTerminate();
+        return -1;
+    }
+
+    // Print texture information
+    std::cout << "Loaded texture: width = " << width << ", height = " << height << ", channels = " << channels << std::endl;
+
+
+        // Load texture into OpenGL
+    GLuint textureId;
+    glGenTextures(1, &textureId);
+    glBindTexture(GL_TEXTURE_2D, textureId);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    // Set texture wrapping and filtering options
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    return textureId;
+}
+
 int main() {
     // Initialize GLFW
     if (!glfwInit()) {
@@ -1024,38 +1144,13 @@ int main() {
         return -1;
     }
 
-    // Load texture using stb_image
-    int width, height, channels;
-    unsigned char* image = stbi_load("terrain.png", &width, &height, &channels, 0);
-    if (!image) {
-        std::cout << "Failed to load texture" << std::endl;
-        glfwTerminate();
-        return -1;
-    }
-
-    // Print texture information
-    std::cout << "Loaded texture: width = " << width << ", height = " << height << ", channels = " << channels << std::endl;
-
     if (figureOutShaders()) {
         std::cout << "Can't into shaders" << std::endl;
         return -1;
     }
 
-        // Load texture into OpenGL
-    GLuint textureId;
-    glGenTextures(1, &textureId);
-    glBindTexture(GL_TEXTURE_2D, textureId);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image);
-    glGenerateMipmap(GL_TEXTURE_2D);
-
-    // Set texture wrapping and filtering options
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
+    textureId = loadTexture("terrain.png");
+    textureWireframeId = loadTexture("wireframe_color.png");
 
     // Set the texture unit for the shader
     GLint textureSamplerLocation = glGetUniformLocation(shaderProgram, "textureSampler");
@@ -1173,7 +1268,7 @@ int main() {
     }
 
     // Free resources
-    stbi_image_free(image);
+    //stbi_image_free(image);
 
     // Terminate GLFW
     glfwTerminate();
