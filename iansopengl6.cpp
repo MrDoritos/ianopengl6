@@ -371,7 +371,7 @@ int drawen_buffers;
 
 struct octree_chunk_t : public blockaccessor_t {
     fullblock_t getBlockAtAbsolute(vec3d pos) override {
-        int width = std::cbrt(pow(8, size));
+        int width = getBlockWidth(size);
         int halfwidth = width;
 
         vec3d pos_rel = pos - position;
@@ -405,7 +405,7 @@ struct octree_chunk_t : public blockaccessor_t {
             int x = int(pos_rel.x);
             int y = int(pos_rel.y);
             int z = int(pos_rel.z);
-            blockstate_t *state = &point[(y * 16) + (z * 4) + x];
+            blockstate_t *state = &point[(y * width * width) + (z * width) + x];
             fullblock_t ret;
             ret.state = state;
             if (state->blockId < block_t::blocks.size())
@@ -483,16 +483,17 @@ struct octree_chunk_t : public blockaccessor_t {
     }
 
     void generate() {
-        for (int y = 0; y < 4; y++)
-            for (int x = 0; x < 4; x++)
-                for (int z = 0; z < 4; z++) {
+        int width = getBlockWidth(size);
+        for (int y = 0; y < width; y++)
+            for (int x = 0; x < width; x++)
+                for (int z = 0; z < width; z++) {
                     if (position.y + y > 0 && position.y + y < 5)
-                    point[(y * 16) + (z * 4) + x] = block_t::stone->getDefaultState();
+                    point[(y * width * width) + (z * width) + x] = block_t::stone->getDefaultState();
                 }
                     //*getBlockAtRelative(vec3d{x,y,z}).state = block_t::stone->getDefaultState();
 //return;
-        for (int x = 0; x < 4; x++) {
-            for (int z = 0; z < 4; z++) {
+        for (int x = 0; x < width; x++) {
+            for (int z = 0; z < width; z++) {
                 int ofx = x + position.x;
                 int ofz = z + position.z;
                 perlin::octaves = 2;
@@ -502,9 +503,9 @@ struct octree_chunk_t : public blockaccessor_t {
                 float height = 80.0f;
                 float value = perlin::getPerlin(ofx * scale + 16000.0f, ofz * scale + 16000.0f) * height;
 
-                for (int y = 0; y < 4; y++) {
+                for (int y = 0; y < width; y++) {
                     if (value - 1.0f > position.y + y)  
-                        point[(y * 16) + (z * 4) + x] = block_t::stone->getDefaultState();
+                        point[(y * width * width) + (z * width) + x] = block_t::stone->getDefaultState();
                 }
             }
         }
@@ -520,6 +521,10 @@ struct octree_chunk_t : public blockaccessor_t {
     int info_count;
     vec3d position;
     static const int info_max = 800000;
+
+    static int getBlockWidth(int size) {
+        return int(pow(2,size));        
+    }
 
     bool needsToRender() {
         if (!is_meshable || !children || size < 3)
@@ -540,7 +545,7 @@ struct octree_chunk_t : public blockaccessor_t {
     void generate_children() {
         printf("Generating size %i\n", size);
         {
-            double childSize = std::cbrt(pow(8, size-1));
+            double childSize = getBlockWidth(size-1);//std::cbrt(pow(8, size-1));
             double halfSize = childSize;//4.0f;// / 2.0;
             
             children = (octree_chunk_t*)malloc(sizeof(octree_chunk_t)*8);
@@ -701,7 +706,7 @@ struct chunk_t : public blockaccessor_t {
 
 struct world_t : public blockaccessor_t {
     //std::vector<chunk_t*> chunks;
-    octree_chunk_t *chunks = new octree_chunk_t(8, vec3d{0,0,0});
+    octree_chunk_t *chunks = new octree_chunk_t(6, vec3d{0,0,0});
 
     fullblock_t getBlockAtAbsolute(vec3d pos) override {
         return chunks->getBlockAtAbsolute(pos);
@@ -788,7 +793,7 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
         //puts("Mesh");
         //printf("%i %i %i\n", ofx, ofy, ofz);
 
-        int width = std::cbrt(pow(8, size));
+        int width = getBlockWidth(size);
         for (int x = 0; x < width; x++) {
             for (int y = 0; y < width; y++) {
                 for (int z = 0; z < width; z++) {
@@ -1323,6 +1328,8 @@ int main() {
     glBindBuffer(GL_ARRAY_BUFFER, vbo_test);
     glBufferData(GL_ARRAY_BUFFER, sizeof(g_vertex_buffer_data), g_vertex_buffer_data, GL_STATIC_DRAW);
 
+	glFrontFace(GL_CW);
+	
     // Main loop
     while (!glfwWindowShouldClose(window)) {
         // Render here
