@@ -222,48 +222,59 @@ GLfloat textureCube3[] = {
 };
 
 GLfloat positionCube3[] = {	
-    // Back face
-    0.0f, 0.0f, 0.0f,
-    1.0f, 0.0f, 0.0f,
-    1.0f, 1.0f, 0.0f,
-    1.0f, 1.0f, 0.0f,
-    0.0f, 1.0f, 0.0f,
-    0.0f, 0.0f, 0.0f,
-    // Front face
-    0.0f, 0.0f, 1.0f,
-    1.0f, 1.0f, 1.0f,
-    1.0f, 0.0f, 1.0f,
-    1.0f, 1.0f, 1.0f,
-    0.0f, 0.0f, 1.0f,
-    0.0f, 1.0f, 1.0f,
-    // Left face
-    0.0f, 1.0f, 1.0f,
-    0.0f, 0.0f, 0.0f,
-    0.0f, 1.0f, 0.0f,
-    0.0f, 0.0f, 0.0f,
-    0.0f, 1.0f, 1.0f,
-    0.0f, 0.0f, 1.0f,
-    // Right face
-    1.0f, 1.0f, 1.0f,
-    1.0f, 1.0f, 0.0f,
-    1.0f, 0.0f, 0.0f,
-    1.0f, 0.0f, 0.0f,
-    1.0f, 0.0f, 1.0f,
-    1.0f, 1.0f, 1.0f,
-    // Bottom face          
-    0.0f, 0.0f, 0.0f,
-    1.0f, 0.0f, 1.0f,
-    1.0f, 0.0f, 0.0f,
-    1.0f, 0.0f, 1.0f,
-    0.0f, 0.0f, 0.0f,
-    0.0f, 0.0f, 1.0f,
-    // Top face
-    0.0f, 1.0f, 0.0f,
-    1.0f, 1.0f, 0.0f,
-    1.0f, 1.0f, 1.0f,
-    1.0f, 1.0f, 1.0f,
-    0.0f, 1.0f, 1.0f,
-    0.0f, 1.0f, 0.0f
+	//Front BAD
+	1.0f, 0.0f, 0.0f,
+	0.0f, 0.0f, 0.0f,
+	0.0f, 1.0f, 0.0f,
+	
+	1.0f, 0.0f, 0.0f,
+	0.0f, 1.0f, 0.0f,
+	1.0f, 1.0f, 0.0f,
+	
+	//Right GOOD
+	1.0f, 0.0f, 1.0f,
+	1.0f, 0.0f, 0.0f,
+	1.0f, 1.0f, 0.0f,
+	
+	1.0f, 0.0f, 1.0f,
+	1.0f, 1.0f, 0.0f,
+	1.0f, 1.0f, 1.0f,
+	
+	//Back GOOD
+	0.0f, 0.0f, 1.0f,
+	1.0f, 0.0f, 1.0f,
+	1.0f, 1.0f, 1.0f,
+	
+	0.0f, 0.0f, 1.0f,
+	1.0f, 1.0f, 1.0f,
+	0.0f, 1.0f, 1.0f,
+			
+	//Left GOOD
+	0.0f, 0.0f, 0.0f,
+	0.0f, 0.0f, 1.0f,
+	0.0f, 1.0f, 1.0f,
+	
+	0.0f, 0.0f, 0.0f,
+	0.0f, 1.0f, 1.0f,
+	0.0f, 1.0f, 0.0f,
+	
+	//Bottom BAD
+	1.0f, 0.0f, 0.0f,
+	1.0f, 0.0f, 1.0f,
+	0.0f, 0.0f, 1.0f,
+	
+	1.0f, 0.0f, 0.0f,
+	0.0f, 0.0f, 1.0f,
+	0.0f, 0.0f, 0.0f,
+	
+	//Top GOOD
+	0.0f, 1.0f, 1.0f,
+	1.0f, 1.0f, 1.0f,
+	1.0f, 1.0f, 0.0f,
+	
+	0.0f, 1.0f, 1.0f,
+	1.0f, 1.0f, 0.0f,
+	0.0f, 1.0f, 0.0f,
 };
 
 void errorCallback(int error, const char* description) {
@@ -357,13 +368,13 @@ int map[2][3][2] = {
     },
     { //Triangle 1
         { //Vertex 0
-            2, 1
+            0, 3
         },
         { //Vertex 1
-            0, 1
+            2, 1
         },
         { //Vertex 2
-            0, 3
+            0, 1
         }
     }			
 };
@@ -372,9 +383,9 @@ game_t currentGame;
 int drawen_buffers;
 
 const int minimum_octree_size = 2;
-const int minimum_block_width = 8;
+const int minimum_block_width = 32;
 const int minimum_render_octree = 3;
-const int maximum_octree_size = 6;
+const int maximum_octree_size = 4;
 
 struct octree_chunk_t : public blockaccessor_t {
     fullblock_t getBlockAtAbsolute(vec3d pos) override {
@@ -509,8 +520,8 @@ struct octree_chunk_t : public blockaccessor_t {
                 perlin::persistence = 0.55f;
                 //float scale = 0.005f;
                 float scale = 0.01f;
-                float height = 80.0f;
-                float value = perlin::getPerlin(ofx * scale + 16000.0f, ofz * scale + 16000.0f) * height;
+                float height = 300.0f;
+                float value = perlin::getPerlin(ofx * scale + 16000.0f, ofz * scale + 16000.0f) * height + 10;
 
                 for (int y = 0; y < width; y++) {
                     if (value - 1.0f > position.y + y)  
@@ -611,7 +622,7 @@ struct octree_chunk_t : public blockaccessor_t {
             }
         }
 
-        if (!childNeedLOD && childRendered) {
+        if (!childNeedLOD || childRendered) {
             for (int i = 0; i < 8; i++)
                 children[i].render();
             return;
@@ -619,7 +630,8 @@ struct octree_chunk_t : public blockaccessor_t {
 
         //if (childRendered) //For some reason this turns on/off lod
         //    return;//return;//return; //If a child rendered, a higher LOD is available and was used, making this size/LOD useless
-
+        if (!needsToRender())
+            return;
 
         if (needsMeshed) {
             if (!draw_buffer) {
@@ -781,9 +793,9 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                                     printf("%i/%i %p\n", *index, info_max, index);
                                     break;
                                 }
-                                break;
+                                //break;
                                 float factor = (1.0f/16.0f);
-                                float textureAtlas[] = {0*factor,0*factor,1*factor,1*factor};
+                                float textureAtlas[] = {1*factor,0*factor,2*factor,1*factor};
                                 //SHOWS ONLY ONES INDIVIDUALLY RENDERED BECAUSE OF APOSITION SHADER
                                 draw_buffer[*index].a.x = positionCube3[(l * 9) + (l1 * 3) + 0] + ofx;// + (float(ofx) / 128.0f);
                                 draw_buffer[*index].a.y = positionCube3[(l * 9) + (l1 * 3) + 1] + ofy;// + (float(ofy) / 128.0f);
@@ -840,7 +852,7 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
 
                     auto _outOfChunkCheck = [&](int _x, int _y, int _z) {
                         //return rand() % 3 == 0;
-                        //return true;
+                        return true;
                         //return false;
                         //puts("Out of chunk check");
                         fullblock_t _fb = currentGame.currentWorld->getBlockAtAbsolute(vec3d{_x,_y,_z});
