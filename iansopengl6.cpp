@@ -543,8 +543,10 @@ struct octree_chunk_t : public blockaccessor_t {
     static const int info_max = 800000;
 
     static int getBlockWidth(int size) {
-        float fact = float(minimum_block_width) / pow(2, 2);
-        return int(pow(2,size)) * fact;        
+        //float fact = float(minimum_block_width) / pow(2, 2);
+        //return int(pow(2,size)) * fact;        
+        //return (minimum_block_width * size) / 2.0f;
+        return 0.25f*minimum_block_width*pow(2, size);
     }
 
     bool needsToRender() {
@@ -852,7 +854,7 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
 
                     auto _outOfChunkCheck = [&](int _x, int _y, int _z) {
                         //return rand() % 3 == 0;
-                        return true;
+                        //return true;
                         //return false;
                         //puts("Out of chunk check");
                         fullblock_t _fb = currentGame.currentWorld->getBlockAtAbsolute(vec3d{_x,_y,_z});
