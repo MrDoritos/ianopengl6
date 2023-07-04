@@ -425,7 +425,7 @@ block_t *block_t::grass;
 block_t *block_t::stone;
 block_t *block_t::dirt;
 
-blockstate_t nothing(1);
+blockstate_t nothing(-1);
 
 struct fullblock_t {
     fullblock_t() {
@@ -823,11 +823,16 @@ struct octree_chunk_t : public blockaccessor_t {
     }
 
     bool out_of_range() {
-        float dist = 
-        sqrtf(((cameraPos.x - position.x) * (cameraPos.x - position.x)) +
-              ((cameraPos.y - position.y) * (cameraPos.y - position.y)) +
-              ((cameraPos.z - position.z) * (cameraPos.z - position.z)));
-        return dist > getBlockWidth(size) * 2.5f;//2.8284f;
+        int dist = getBlockWidth(size) * 2;
+        return abs(cameraPos.x - position.x) > dist ||
+               abs(cameraPos.y - position.y) > dist ||
+               abs(cameraPos.z - position.z) > dist;
+        
+        //float dist = 
+        //sqrtf(((cameraPos.x - position.x) * (cameraPos.x - position.x)) +
+        //      ((cameraPos.y - position.y) * (cameraPos.y - position.y)) +
+        //      ((cameraPos.z - position.z) * (cameraPos.z - position.z)));
+        //return dist > getBlockWidth(size) * 2.5f;//2.8284f;
     }
 
     void render() {
@@ -975,7 +980,7 @@ struct world_t : public blockaccessor_t {
         int half = wwidth / 2;
 
         for (int i = 0; i < slot_count; i++) {
-            if (chunks[i]->out_of_range()) {
+            if (chunks[i] && chunks[i]->out_of_range()) {
                 puts("chunk out of range");
                 chunks[i]->~octree_chunk_t();
                 chunks[i] = 0;
@@ -1015,7 +1020,7 @@ struct world_t : public blockaccessor_t {
                         if (!chunks[i]) {
                             puts("allocated new chunk");
                             chunks[i] = new octree_chunk_t(maximum_octree_size, vec3d{testx,testy,testz});
-                            break;
+                            return; //1 per frame
                         }
                     }
                 }
@@ -1053,17 +1058,21 @@ struct world_t : public blockaccessor_t {
         //        return chunk->getBlockAtAbsolute(pos);
         //}
         for (int i = 0; i < slot_count; i++)
-            if (chunks[i]->isBlockLoaded(pos))
+            if (chunks[i] && chunks[i]->isBlockLoaded(pos))
                 return chunks[i]->getBlockAtAbsolute(pos);
         //default
-        return chunks[0]->getBlockAtAbsolute(pos);
+        fullblock_t nothing_fb;
+        nothing_fb.block = block_t::stone;
+        nothing_fb.state = &nothing;
+        return nothing_fb;
+        //return chunks[0]->getBlockAtAbsolute(pos);
 
         //return chunks->getBlockAtRelative(pos);
     }
 
     bool isBlockLoaded(vec3d pos) override {
         for (int i = 0; i < slot_count; i++)
-            if (chunks[i]->isBlockLoaded(pos))
+            if (chunks[i] && chunks[i]->isBlockLoaded(pos))
                 return true;
         return false;
         //return chunks->isBlockLoaded(pos);
@@ -1443,7 +1452,8 @@ void game_t::render() {
     //currentWorld->chunks->render();
     currentWorld->set_chunks();
     for (int i = 0; i < currentWorld->slot_count; i++)
-        currentWorld->chunks[i]->render();
+        if (currentWorld->chunks[i])
+            currentWorld->chunks[i]->render();
     debug_info->render();
     glUseProgram(shaderProgram);
     //printf("Drew %i buffers\n", drawen_buffers);
