@@ -437,6 +437,8 @@ struct fullblock_t {
     block_t *block;
 };
 
+fullblock_t prevBlockLookingAt;
+
 struct blockaccessor_t {
     virtual fullblock_t getBlockAtAbsolute(vec3d pos) = 0;
     virtual fullblock_t getBlockAtRelative(vec3d pos) = 0;
@@ -525,7 +527,7 @@ struct octree_chunk_t : public blockaccessor_t {
             return nothing_to_return;
         }
 
-        if (size > 2) {
+        if (size > minimum_octree_size) {
             int cwidth = getBlockWidth(size-1);
             int childx = float(pos_rel.x)/float(cwidth);
             int childy = float(pos_rel.y)/float(cwidth);
@@ -676,7 +678,7 @@ struct octree_chunk_t : public blockaccessor_t {
                         point[(y * width * width) + (z * width) + x] = block_t::stone->getDefaultState();
                     else
                         if (value - 1.0f > position.y + y)
-                        point[(y * width * width) + (z * width) + x] = block_t::grass->getDefaultState();
+                           point[(y * width * width) + (z * width) + x] = block_t::grass->getDefaultState();
                 }
             }
         }
@@ -760,6 +762,7 @@ struct octree_chunk_t : public blockaccessor_t {
 
     ~octree_chunk_t() {
         free_children();
+        free(children);
         glDeleteBuffers(1, &vbo);
         glDeleteVertexArrays(1, &vao);
     }
@@ -1174,28 +1177,32 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                     octree_chunk_t* child = &children[i];
                     //if (!child->needsToRender()) {
                         child->is_dependent_meshing();
-                        child->mesh(buffer, index); //Nothing renders if this is commented out
+                       // child->mesh(buffer, index); //Nothing renders if this is commented out
                     //} else {
                     //    childNotMeshed = false;
                     //}
                 }
             }
 
-            if (!childNotMeshed)
-                return; //If no child contributed to the mesh, we need to draw ourselves
+            //if (!childNotMeshed)
+           //     return; //If no child contributed to the mesh, we need to draw ourselves
         }
 
-        if (size > minimum_octree_size)
-            return;
+        //if (size > minimum_octree_size)
+        //    return;
 
         //We have blocks that can be meshed
         //puts("Mesh");
         //printf("%i %i %i\n", ofx, ofy, ofz);
 
         int width = getBlockWidth(size);
-        for (int x = 0; x < width; x++) {
-            for (int y = 0; y < width; y++) {
-                for (int z = 0; z < width; z++) {
+        int skip = size - minimum_octree_size;
+        int block_scale = skip * 3;
+        if (skip == 1)
+            block_scale = 1;
+        for (int x = 0; x < width; x+=skip) {
+            for (int y = 0; y < width; y+=skip) {
+                for (int z = 0; z < width; z+=skip) {
                     
                     //getBlockAt(x + ofx, y + ofy, z + ofz, &block);
                     //if (block.parent == blocks::AIR)
@@ -1218,7 +1225,6 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                     
                     auto isVisible = [&](int _x, int _y, int _z) {
                         //_x += ofx; _y += ofy; _z += ofz;
-                        
                         if (_x > width-1 ||
                             _y > width-1 ||
                             _z > width-1)
@@ -1251,9 +1257,9 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                                                         fb.block->textureAtlas[2]*factor,
                                                         fb.block->textureAtlas[3]*factor};
 
-                                draw_buffer[*index].a.x = positionCube3[(l * 9) + (l1 * 3) + 0] + float(x + ofx);
-                                draw_buffer[*index].a.y = positionCube3[(l * 9) + (l1 * 3) + 1] + float(y + ofy);
-                                draw_buffer[*index].a.z = positionCube3[(l * 9) + (l1 * 3) + 2] + float(z + ofz);
+                                draw_buffer[*index].a.x = positionCube3[(l * 9) + (l1 * 3) + 0] * block_scale + float(x + ofx);
+                                draw_buffer[*index].a.y = positionCube3[(l * 9) + (l1 * 3) + 1] * block_scale + float(y + ofy);
+                                draw_buffer[*index].a.z = positionCube3[(l * 9) + (l1 * 3) + 2] * block_scale + float(z + ofz);
                                 
                                 draw_buffer[*index].a.u = fb.block->getTexture(l,l1,0) * factor;//textureAtlas[map[l % 2][l1][0]];
                                 draw_buffer[*index].a.v = fb.block->getTexture(l,l1,1) * factor;//textureAtlas[map[l % 2][l1][1]];
@@ -1317,7 +1323,7 @@ fullblock_t game_t::getPlayerLookingAt(vec3d origin, vec3d front) {
         //printf("\r\t\t\t\t%f %f %f", bx, by, bz);
         
         if (block.state->blockId == 0) {
-            //worldObj->player.prevBlockLookingAt = { rx + cameraPos.x, ry + cameraPos.y, rz + cameraPos.z };
+            prevBlockLookingAt = block;
             if (!(ray + 0.1f < 5.0f)) {
                 //worldObj->player.prevBlockLookingAt = { -99999, 99999, 12345 };
             }
@@ -1493,7 +1499,9 @@ void game_t::render() {
     for (int i = 0; i < currentWorld->slot_count; i++)
         if (currentWorld->chunks[i])
             currentWorld->chunks[i]->render();
+    glDisable(GL_CULL_FACE);
     debug_info->render();
+    glEnable(GL_CULL_FACE);
     glUseProgram(shaderProgram);
     //printf("Drew %i buffers\n", drawen_buffers);
     /*
@@ -1700,7 +1708,7 @@ int main() {
 
 	uniModel = glGetUniformLocation(shaderProgram, "model");
 	uniView = glGetUniformLocation(shaderProgram, "view");
-	proj = glm::perspective(glm::radians(90.0f), 1920.0f / 1080.0f, 0.1f, 500.0f);
+	proj = glm::perspective(glm::radians(90.0f), 1920.0f / 1080.0f, 0.1f, 1000.0f);
     GLint uniProj = glGetUniformLocation(shaderProgram, "proj");
     glUniformMatrix4fv(uniProj, 1, GL_FALSE, glm::value_ptr(proj));
 	
@@ -1767,7 +1775,9 @@ int main() {
     glBindBuffer(GL_ARRAY_BUFFER, vbo_test);
     glBufferData(GL_ARRAY_BUFFER, sizeof(g_vertex_buffer_data), g_vertex_buffer_data, GL_STATIC_DRAW);
 
-	glFrontFace(GL_CW);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_FRONT);
+    glFrontFace(GL_CW);
 	
     // Main loop
     while (!glfwWindowShouldClose(window)) {
@@ -1919,9 +1929,18 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
 }
 
-void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
-	//blockComplete block;
-	//printf("block: %f, %f, %f; prev: %f, %f, %f\r\n", worldObj->player.blockLookingAt.x, worldObj->player.blockLookingAt.y, worldObj->player.blockLookingAt.z, worldObj->player.prevBlockLookingAt.x, worldObj->player.prevBlockLookingAt.y, worldObj->player.prevBlockLookingAt.z);
+void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {	
+    fullblock_t lookingAt = currentGame.getPlayerLookingAt(vec3d{cameraPos.x, cameraPos.y, cameraPos.z}, vec3d{cameraFront.x, cameraFront.y, cameraFront.z});
+    if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
+		if (currentGame.currentWorld->isBlockLoaded(prevBlockLookingAt.position)) {
+            *currentGame.currentWorld->getBlockAtAbsolute(prevBlockLookingAt.position).state = block_t::dirt->getDefaultState();
+		}
+	}
+	if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+		if (currentGame.currentWorld->isBlockLoaded(lookingAt.position)) {
+            *currentGame.currentWorld->getBlockAtAbsolute(lookingAt.position).state = block_t::air->getDefaultState();
+		}
+	}	
 }
 
 void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
