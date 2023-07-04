@@ -301,6 +301,13 @@ struct blockstate_t {
     short blockId;
 };
 
+#define BOTTOM_FACE 4
+#define RIGHT_FACE 0
+#define LEFT_FACE 2
+#define BACK_FACE 3
+#define FRONT_FACE 1
+#define TOP_FACE 5
+
 struct block_t {
     static std::vector<block_t*> blocks;
 
@@ -329,6 +336,8 @@ struct block_t {
         ret.blockId = blockId;
         return ret;
     }
+
+    virtual unsigned char getFaceBrightness(int face, fullblock_t fb);
 
 	virtual unsigned char getTexture(int triangle, int vertex, int index) {
 		int map[2][3][2] = {
@@ -585,8 +594,8 @@ struct octree_chunk_t : public blockaccessor_t {
         for (int y = 0; y < width; y++)
             for (int x = 0; x < width; x++)
                 for (int z = 0; z < width; z++) {
-                    if (position.y + y > 0 && position.y + y < 5)
-                    point[(y * width * width) + (z * width) + x] = block_t::stone->getDefaultState();
+                    //if (position.y + y > 0 && position.y + y < 5)
+                    //point[(y * width * width) + (z * width) + x] = block_t::stone->getDefaultState();
                 }
                     //*getBlockAtRelative(vec3d{x,y,z}).state = block_t::stone->getDefaultState();
 //return;
@@ -599,9 +608,18 @@ struct octree_chunk_t : public blockaccessor_t {
                 //float scale = 0.005f;
                 float scale = 0.01f;
                 float height = 600.0f;
-                float value = perlin::getPerlin(ofx * scale + 16000.0f, ofz * scale + 16000.0f) * height + 10;
+                float value;// = perlin::getPerlin(ofx * scale + 16000.0f, ofz * scale + 16000.0f) * height + 10;
 
                 for (int y = 0; y < width; y++) {
+                    int ofy = y + position.y;
+                    auto sampleSphere = [](double radius, double x, double y, double z, double centerX, double centerY, double centerZ) {		
+                        double fx = x - centerX, fy = y - centerY, fz = z - centerZ;
+                        return radius * radius > ((fx * fx) + (fy * fy) + (fz * fz));
+                    };
+                    
+                    if	(sampleSphere(60, ofx, ofy, ofz, 100.0f, 100.0f, 100.0f))
+                        point[(y * width * width) + (z * width) + x] = block_t::dirt->getDefaultState();
+                    continue;
                     if (value - 2.0f > position.y + y)  
                         point[(y * width * width) + (z * width) + x] = block_t::stone->getDefaultState();
                     else
@@ -862,6 +880,17 @@ struct world_t : public blockaccessor_t {
     }
 };
 
+unsigned char block_t::getFaceBrightness(int face, fullblock_t fb) {
+    switch (face) {
+        case TOP_FACE:
+            return 255;
+        case BOTTOM_FACE:
+            return 127;
+        default:
+            return 191;
+    }
+}
+
 void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
         int ofx = position.x;
         int ofy = position.y;
@@ -890,7 +919,7 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                                 
                                 
                                 draw_buffer[*index].a.i = 1.0f;
-                                draw_buffer[*index].a.a = 1.0f;
+                                draw_buffer[*index].a.a = 1.0f; //world brightness
                                 
                                 (*index)++;
                             }
@@ -965,7 +994,7 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
 
                     auto _addFace = [&](int _ofs) {
                         
-                        for (int l = _ofs; l < _ofs + 2; l++) {
+                        for (int l = _ofs * 2; l < _ofs * 2 + 2; l++) {
                             for (int l1 = 0; l1 < 3; l1++) {			
                                 if ((*index) + 2 > info_max) {
                                     puts("Could not resize buffers");
@@ -985,12 +1014,12 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                                 draw_buffer[*index].a.y = positionCube3[(l * 9) + (l1 * 3) + 1] + float(y + ofy);
                                 draw_buffer[*index].a.z = positionCube3[(l * 9) + (l1 * 3) + 2] + float(z + ofz);
                                 
-                                draw_buffer[*index].a.u = textureAtlas[map[l % 2][l1][0]];
-                                draw_buffer[*index].a.v = textureAtlas[map[l % 2][l1][1]];
+                                draw_buffer[*index].a.u = fb.block->getTexture(l,l1,0) * factor;//textureAtlas[map[l % 2][l1][0]];
+                                draw_buffer[*index].a.v = fb.block->getTexture(l,l1,1) * factor;//textureAtlas[map[l % 2][l1][1]];
                                 
                                 
-                                draw_buffer[*index].a.i = 1.0f;
-                                draw_buffer[*index].a.a = 1.0f;
+                                draw_buffer[*index].a.i = ((float)fb.block->getFaceBrightness(_ofs,fb))/255.0f; //block brightness
+                                draw_buffer[*index].a.a = ((float)fb.block->getFaceBrightness(_ofs,fb))/255.0f; //world brightness
                                 
                                 (*index)++;
                             }
@@ -998,21 +1027,20 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                         
                     };
                     
-                    
                     //Old order  10 -> 8 -> 0 -> 4 -> 6 -> 2
                     //New order? 10 -> 8 -> 6 -> 4 -> 0 -> 2
                             if (isVisible(x, y - 1, z)) //Bottom 2
-                                _addFace(8);  //FINE
+                                _addFace(BOTTOM_FACE);  //FINE
                             if (isVisible(x, y, z - 1)) //Right 4
-                                _addFace(0);//_addFace(0);  //FINE					
+                                _addFace(RIGHT_FACE);//_addFace(0);  //FINE					
                             if (isVisible(x, y, z + 1)) //Left 6
-                                _addFace(4);//_addFace(4);  //FINE				
+                                _addFace(LEFT_FACE);//_addFace(4);  //FINE				
                             if (isVisible(x - 1, y, z)) //Back 8
-                                _addFace(6);//_addFace(6); //FINE						
+                                _addFace(BACK_FACE);//_addFace(6); //FINE						
                             if (isVisible(x + 1, y, z)) //Front 10
-                                _addFace(2); //FINE
+                                _addFace(FRONT_FACE); //FINE
                             if (isVisible(x, y + 1, z))
-                                _addFace(10);
+                                _addFace(TOP_FACE);
 
                 }
             }

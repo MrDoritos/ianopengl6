@@ -21,6 +21,9 @@ uniform sampler2D textureSampler;
 void main()
 {
     vec4 texColor = texture(textureSampler, TexCoord);
-    FragColor = texColor;// * vec4(vec3(LightIntensity, 1.0), 1.0);
+    float brighter = LightIntensity.x;
+    if (LightIntensity.y > LightIntensity.x)
+        brighter = LightIntensity.y;
+    FragColor = texColor * vec4(vec3(brighter),1.0);
     //FragColor = vec4(1.0, 0,0,1.0);
 }
