@@ -723,11 +723,18 @@ struct octree_chunk_t : public blockaccessor_t {
             }
         }
 
+        if (!childNeedLOD && childRendered) {
+            for (int i = 0; i < 8; i++)
+                children[i].render();
+            return;
+        }
+        /*
         if (!childNeedLOD || childRendered) {
             for (int i = 0; i < 8; i++)
                 children[i].render();
             return;
         }
+        */
 
         //if (childRendered) //For some reason this turns on/off lod
         //    return;//return;//return; //If a child rendered, a higher LOD is available and was used, making this size/LOD useless
@@ -931,11 +938,11 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
             if (has_children) {
                 for (int i = 0; i < 8; i++) {
                     octree_chunk_t* child = &children[i];
-                    if (!child->needsToRender()) {
+                    //if (!child->needsToRender()) {
                         child->mesh(buffer, index); //Nothing renders if this is commented out
-                    } else {
-                        childNotMeshed = false;
-                    }
+                    //} else {
+                    //    childNotMeshed = false;
+                    //}
                 }
             }
 
