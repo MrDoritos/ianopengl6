@@ -448,9 +448,9 @@ game_t currentGame;
 int drawen_buffers;
 
 const int minimum_octree_size = 2;
-const int minimum_block_width = 32;
+const int minimum_block_width = 4;
 const int minimum_render_octree = 2;
-const int maximum_octree_size = 5;
+const int maximum_octree_size = 7;
 
 struct octree_chunk_t : public blockaccessor_t {
     fullblock_t getBlockAtAbsolute(vec3d pos) override {
@@ -617,7 +617,7 @@ struct octree_chunk_t : public blockaccessor_t {
                         return radius * radius > ((fx * fx) + (fy * fy) + (fz * fz));
                     };
                     
-                    if	(sampleSphere(60, ofx, ofy, ofz, 100.0f, 100.0f, 100.0f))
+                    if	(sampleSphere(getBlockWidth(maximum_octree_size-1)-1, ofx, ofy, ofz, getBlockWidth(maximum_octree_size-1), getBlockWidth(maximum_octree_size-1), getBlockWidth(maximum_octree_size-1)))
                         point[(y * width * width) + (z * width) + x] = block_t::dirt->getDefaultState();
                     continue;
                     if (value - 2.0f > position.y + y)  
