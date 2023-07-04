@@ -491,6 +491,7 @@ int map[2][3][2] = {
 
 game_t currentGame;
 int drawen_buffers;
+int triangles;
 int meshPerFrame;
 
 const int minimum_octree_size = 2;
@@ -961,6 +962,7 @@ struct octree_chunk_t : public blockaccessor_t {
         //printf("Drawing %i verticies\n", chunk->info_count);
         glDrawArrays(GL_TRIANGLES, 0, info_count);
         drawen_buffers++;
+        triangles += info_count;
         //glEnd();
         // Unbind the VAO
         glBindVertexArray(0);
@@ -979,23 +981,59 @@ struct world_t : public blockaccessor_t {
         int wwidth = width * 3;
         int half = wwidth / 2;
 
+        //for (int i = 0; i < slot_count; i++) {
+        //    if (chunks[i] && chunks[i]->out_of_range()) {
+        //        puts("chunk out of range");
+        //        chunks[i]->~octree_chunk_t();
+        //        chunks[i] = 0;
+        //    }
+        //}
+                        
+        //int playerrx0 = ((int)cameraPos.x - half) / width;
+        //int playerry0 = ((int)cameraPos.y - half) / width;
+        //int playerrz0 = ((int)cameraPos.z - half) / width;
+        int playerrx0 = ((int)cameraPos.x) / width;
+        int playerry0 = ((int)cameraPos.y) / width;
+        int playerrz0 = ((int)cameraPos.z) / width;
+
         for (int i = 0; i < slot_count; i++) {
-            if (chunks[i] && chunks[i]->out_of_range()) {
+            bool has = false;
+            for (int xr = 0; xr < 3; xr++) {
+                for (int yr = 0; yr < 3; yr++) {
+                    for (int zr = 0; zr < 3; zr++) {
+                        int x = ((-((xr) & 1) * 2)+1) * ((xr+1)/2);
+                        int y = ((-((yr) & 1) * 2)+1) * ((yr+1)/2);
+                        int z = ((-((zr) & 1) * 2)+1) * ((zr+1)/2);
+                        int testx = (playerrx0 + x) * width;
+                        int testy = (playerry0 + y) * width;
+                        int testz = (playerrz0 + z) * width;
+                        
+                        if (chunks[i]) {
+                            if ((int)chunks[i]->position.x == testx &&
+                                (int)chunks[i]->position.y == testy &&
+                                (int)chunks[i]->position.z == testz) {
+                                    has = true;
+                                    goto done;
+                                    break;
+                              }
+                        }
+                    }
+                }
+            }
+            done:;
+            if (!has && chunks[i]) {
                 puts("chunk out of range");
                 chunks[i]->~octree_chunk_t();
                 chunks[i] = 0;
             }
         }
-        int playerrx0 = ((int)cameraPos.x - half) / width;
-        int playerry0 = ((int)cameraPos.y - half) / width;
-        int playerrz0 = ((int)cameraPos.z - half) / width;
-        for (int x = 0; x < 3; x++) {
-            for (int y = 0; y < 3; y++) {
-                for (int z = 0; z < 3; z++) {
-                    //iterate all by x y z i guess
-                    //int testx = ((x * width) + playerrx0);
-                    //int testy = ((y * width) + playerry0);
-                    //int testz = ((z * width) + playerrz0);
+
+        for (int xr = 0; xr < 3; xr++) {
+            for (int yr = 0; yr < 3; yr++) {
+                for (int zr = 0; zr < 3; zr++) {
+                    int x = ((-((xr) & 1) * 2)+1) * ((xr+1)/2);
+                    int y = ((-((yr) & 1) * 2)+1) * ((yr+1)/2);
+                    int z = ((-((zr) & 1) * 2)+1) * ((zr+1)/2);
                     int testx = (playerrx0 + x) * width;
                     int testy = (playerry0 + y) * width;
                     int testz = (playerrz0 + z) * width;
@@ -1449,6 +1487,7 @@ void game_t::render() {
     glUseProgram(shaderProgram);
     drawen_buffers = 0;
     meshPerFrame = 0;
+    triangles = 0;
     //currentWorld->chunks->render();
     currentWorld->set_chunks();
     for (int i = 0; i < currentWorld->slot_count; i++)
@@ -1774,8 +1813,8 @@ int main() {
 
         char char_buf[1000];
         fullblock_t lookingAt = currentGame.getPlayerLookingAt(vec3d{cameraPos.x, cameraPos.y, cameraPos.z}, vec3d{cameraFront.x, cameraFront.y, cameraFront.z});
-        snprintf(char_buf, 1000, "FPS: %.0f\n<%.2f,%.2f,%.2f>\nBuffers: %i\nLooking At: <%i,%i,%i>:%i", fps, cameraPos.x, cameraPos.y, cameraPos.z, drawen_buffers,
-        (int)lookingAt.position.x, (int)lookingAt.position.y, (int)lookingAt.position.z, lookingAt.state->blockId);
+        snprintf(char_buf, 1000, "FPS: %.0f\n<%.2f,%.2f,%.2f>\nBuffers: %i\nLooking At: <%i,%i,%i>:%i\nTriangles: %i", fps, cameraPos.x, cameraPos.y, cameraPos.z, drawen_buffers,
+        (int)lookingAt.position.x, (int)lookingAt.position.y, (int)lookingAt.position.z, lookingAt.state->blockId, triangles / 3);
         debug_info->set_string(&char_buf[0]);
 
         glBindBuffer(GL_ARRAY_BUFFER, vbo_test);
