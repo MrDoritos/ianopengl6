@@ -7,7 +7,11 @@
 #include <vector>
 #include <fstream>
 #include <chrono>
+#include <thread>
+#include <mutex>
 #include <sstream>
+#include <unistd.h>
+#include <queue>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -150,6 +154,46 @@ float perlin::getNormalNoise(float x, float z) {
 	return perlin::getNormal(1,-1,1,0,noise);
 }
 
+const int workerThreadCount = 8;
+const int workerNoTaskWaitPeriod = 1000;
+
+struct workerTask_t {
+	int workerTaskResult;
+	void* arg1;
+	void(*workerTaskFunction)(void*);
+};
+
+std::thread workerThreads[workerThreadCount];
+
+std::queue<workerTask_t*> workerTasks;
+std::mutex workerTasksMux;
+std::mutex drawBufferMux;
+	
+void workerLoop() {
+	while (true) {
+			while (true) {
+				workerTask_t *wt;
+				{
+					std::lock_guard<std::mutex> lk(workerTasksMux);
+					if (workerTasks.size() < 1)
+						break;
+					wt = workerTasks.front();
+					workerTasks.pop();
+				}
+				wt->workerTaskFunction(wt->arg1);
+				delete wt;				
+			}
+		usleep(workerNoTaskWaitPeriod);
+		}
+	}
+
+void clear_taskqueue() {
+	std::lock_guard<std::mutex> lk(workerTasksMux);
+	while (workerTasks.size() > 0) {
+		delete workerTasks.front();
+		workerTasks.pop();
+	}
+}
 struct vec3d : public glm::vec3 {
 	vec3d(float x, float y, float z) {
 		this->x = x;
@@ -447,11 +491,12 @@ int map[2][3][2] = {
 
 game_t currentGame;
 int drawen_buffers;
+int meshPerFrame;
 
 const int minimum_octree_size = 2;
-const int minimum_block_width = 4;
+const int minimum_block_width = 16;
 const int minimum_render_octree = 2;
-const int maximum_octree_size = 7;
+const int maximum_octree_size = 5;
 
 struct octree_chunk_t : public blockaccessor_t {
     fullblock_t getBlockAtAbsolute(vec3d pos) override {
@@ -541,6 +586,7 @@ struct octree_chunk_t : public blockaccessor_t {
         has_children = false;
         is_meshable = false;
         needsMeshed = true;
+        waitingOnThread = false;
         children = 0;
         point = 0;
         vbo = 0;
@@ -553,6 +599,7 @@ struct octree_chunk_t : public blockaccessor_t {
         has_children = false;
         is_meshable = false;
         needsMeshed = true;
+        waitingOnThread = false;
         children = 0;
         point = 0;
         vbo = 0;
@@ -609,7 +656,7 @@ struct octree_chunk_t : public blockaccessor_t {
                 //float scale = 0.005f;
                 float scale = 0.01f;
                 float height = 600.0f;
-                float value;// = perlin::getPerlin(ofx * scale + 16000.0f, ofz * scale + 16000.0f) * height + 10;
+                float value = perlin::getPerlin(ofx * scale + 16000.0f, ofz * scale + 16000.0f) * height + 10;
 
                 for (int y = 0; y < width; y++) {
                     int ofy = y + position.y;
@@ -618,9 +665,9 @@ struct octree_chunk_t : public blockaccessor_t {
                         return radius * radius > ((fx * fx) + (fy * fy) + (fz * fz));
                     };
                     
-                    if	(sampleSphere(getBlockWidth(maximum_octree_size-1)-1, ofx, ofy, ofz, getBlockWidth(maximum_octree_size-1), getBlockWidth(maximum_octree_size-1), getBlockWidth(maximum_octree_size-1)))
-                        point[(y * width * width) + (z * width) + x] = block_t::dirt->getDefaultState();
-                    continue;
+                    //if	(sampleSphere(getBlockWidth(maximum_octree_size-1)-1, ofx, ofy, ofz, getBlockWidth(maximum_octree_size-1), getBlockWidth(maximum_octree_size-1), getBlockWidth(maximum_octree_size-1)))
+                    //    point[(y * width * width) + (z * width) + x] = block_t::dirt->getDefaultState();
+                    //continue;
                     if (value - 2.0f > position.y + y)  
                         point[(y * width * width) + (z * width) + x] = block_t::stone->getDefaultState();
                     else
@@ -638,6 +685,7 @@ struct octree_chunk_t : public blockaccessor_t {
     bool has_children;
     bool is_meshable;
     bool needsMeshed;
+    bool waitingOnThread;
     int info_count;
     vec3d position;
     static const int info_max = 800000;
@@ -653,9 +701,7 @@ struct octree_chunk_t : public blockaccessor_t {
         if (!is_meshable || !children || size < minimum_render_octree)
             return false;
         //return true;
-        float scale = 0.1f;
-        float threshold = scale * size;
-        threshold = getBlockWidth(size) * 4;
+        float threshold = getBlockWidth(size) * 4;
         float dist = 
         sqrtf(((cameraPos.x - position.x) * (cameraPos.x - position.x)) +
               ((cameraPos.y - position.y) * (cameraPos.y - position.y)) +
@@ -665,8 +711,19 @@ struct octree_chunk_t : public blockaccessor_t {
         return dist < threshold;
     }
 
+    void free_children() {
+        if (has_children && children) {
+            for (int i = 0; i < 8; i++) {
+                children[i].free_children();
+                children[i].~octree_chunk_t();
+            }
+        }
+
+        has_children = false;
+    }
+
     void generate_children() {
-        printf("Generating size %i\n", size);
+        //printf("Generating size %i\n", size);
         {
             double childSize = getBlockWidth(size-1);//std::cbrt(pow(8, size-1));
             double halfSize = childSize;//4.0f;// / 2.0;
@@ -698,51 +755,37 @@ struct octree_chunk_t : public blockaccessor_t {
     }
 
     ~octree_chunk_t() {
+        free_children();
         glDeleteBuffers(1, &vbo);
         glDeleteVertexArrays(1, &vao);
     }
 
+    bool independent = false;
+
+    void is_individually_rendering() {
+        if (!independent) {
+            //puts("Now in range");
+            independent = true;
+
+            //for (int i = 0; i < 8; i++)
+            //    children[i].is_dependent_meshing();
+        }
+    }
+
+    void is_dependent_meshing() {
+        if (independent) {
+            //puts("Now out of range");
+            independent = false;
+        }
+    }
+
     void mesh(_draw_type *buffer, int *index);
 
-    void render() {
-        //if (!is_meshable)
-        //    return;
+    void mesh_entrypoint() {
+        //waitingOnThread = true;
 
-        //if (!chunk->loaded) {
-        //    fprintf(stderr, "Not yet loaded\n");
-        //    continue;
-        //}
-
-        bool childRendered = false;
-        bool childNeedLOD = false;
-        for (int i = 0; i < 8; i++) {
-            if (children[i].needsToRender()) {
-                //children[i].render();
-                childRendered = true;
-            } else {
-                childNeedLOD = true;
-            }
-        }
-
-        if (!childNeedLOD && childRendered) {
-            for (int i = 0; i < 8; i++)
-                children[i].render();
-            return;
-        }
-        /*
-        if (!childNeedLOD || childRendered) {
-            for (int i = 0; i < 8; i++)
-                children[i].render();
-            return;
-        }
-        */
-
-        //if (childRendered) //For some reason this turns on/off lod
-        //    return;//return;//return; //If a child rendered, a higher LOD is available and was used, making this size/LOD useless
-        if (!needsToRender())
-            return;
-
-        if (needsMeshed) {
+        {
+			//std::lock_guard<std::mutex> lk(drawBufferMux);
             if (!draw_buffer) {
                 printf("Allocating %i entries\n", info_max);
                 draw_buffer = (_draw_type*)malloc(sizeof(_draw_type) * info_max);
@@ -750,7 +793,7 @@ struct octree_chunk_t : public blockaccessor_t {
             needsMeshed = false;
             info_count = 0;
 
-            fprintf(stderr, "Meshing\n");            
+            //fprintf(stderr, "Meshing\n");            
             mesh(draw_buffer, &info_count);
 
             if (info_count == 0)
@@ -771,8 +814,67 @@ struct octree_chunk_t : public blockaccessor_t {
             glEnableVertexAttribArray(2);
 
             needsMeshed = false;
+            //waitingOnThread = false;
             printf("Uploaded %i verticies\n", info_count);
+        }
+    }
 
+    bool out_of_range() {
+        float dist = 
+        sqrtf(((cameraPos.x - position.x) * (cameraPos.x - position.x)) +
+              ((cameraPos.y - position.y) * (cameraPos.y - position.y)) +
+              ((cameraPos.z - position.z) * (cameraPos.z - position.z)));
+        return dist > getBlockWidth(size) * 2.5f;//2.8284f;
+    }
+
+    void render() {
+        //if (!is_meshable)
+        //    return;
+
+        //if (!chunk->loaded) {
+        //    fprintf(stderr, "Not yet loaded\n");
+        //    continue;
+        //}
+
+        { //Test if any children are in the range of their LOD, if they are render to them, ignore ourselves
+            bool childRendered = false;
+            bool childNeedLOD = false;
+            for (int i = 0; i < 8; i++) {
+                if (children[i].needsToRender()) {
+                    //children[i].render();
+                    childRendered = true;
+                } else {
+                    childNeedLOD = true;
+                }
+            }
+
+            if (!childNeedLOD && childRendered) {
+                for (int i = 0; i < 8; i++)
+                    children[i].render();
+                is_dependent_meshing();
+                return;
+            }
+        }
+
+        is_individually_rendering(); //Now in range
+
+        if (!needsToRender())
+            return;
+        
+        if (waitingOnThread)
+            return;
+
+        if (needsMeshed) {
+            if (meshPerFrame < 1)
+                mesh_entrypoint();
+            if (info_count > 0)
+                meshPerFrame++;
+            //waitingOnThread = true;
+            //workerTask_t *task = new workerTask_t;
+			//task->arg1 = this;
+			//task->workerTaskFunction = (void(*)(void*))(void(*)(octree_chunk_t*))&octree_chunk_t::mesh_entrypoint;
+			//workerTasks.push(task);
+            //return;//come back when meshed
         }
 
 
@@ -860,10 +962,86 @@ struct octree_chunk_t : public blockaccessor_t {
 
 struct world_t : public blockaccessor_t {
     //std::vector<chunk_t*> chunks;
-    octree_chunk_t *chunks = new octree_chunk_t(maximum_octree_size, vec3d{0,0,0});
+    const int slot_count = 27;
+    //octree_chunk_t *chunks = new octree_chunk_t(maximum_octree_size, vec3d{0,0,0});
+    octree_chunk_t *chunks[27];
+    
+    void set_chunks() {
+        int width = octree_chunk_t::getBlockWidth(maximum_octree_size);
+        int wwidth = width * 3;
+        int half = wwidth / 2;
+
+        for (int i = 0; i < slot_count; i++) {
+            if (chunks[i]->out_of_range()) {
+                puts("chunk out of range");
+                chunks[i]->~octree_chunk_t();
+                chunks[i] = 0;
+            }
+        }
+        int playerrx0 = ((int)cameraPos.x - half) / width;
+        int playerry0 = ((int)cameraPos.y - half) / width;
+        int playerrz0 = ((int)cameraPos.z - half) / width;
+        for (int x = 0; x < 3; x++) {
+            for (int y = 0; y < 3; y++) {
+                for (int z = 0; z < 3; z++) {
+                    //iterate all by x y z i guess
+                    //int testx = ((x * width) + playerrx0);
+                    //int testy = ((y * width) + playerry0);
+                    //int testz = ((z * width) + playerrz0);
+                    int testx = (playerrx0 + x) * width;
+                    int testy = (playerry0 + y) * width;
+                    int testz = (playerrz0 + z) * width;
+
+                    bool has = false;
+                    for (int i = 0; i < slot_count; i++) {
+                        if (chunks[i]) {
+                            if ((int)chunks[i]->position.x == testx &&
+                                (int)chunks[i]->position.y == testy &&
+                                (int)chunks[i]->position.z == testz) {
+                                    has = true;
+                                    break;
+                                }
+                        }
+                    }
+                    if (has)
+                        continue;
+
+                    //puts("doesn't have");
+
+                    for (int i = 0; i < slot_count; i++) {
+                        if (!chunks[i]) {
+                            puts("allocated new chunk");
+                            chunks[i] = new octree_chunk_t(maximum_octree_size, vec3d{testx,testy,testz});
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    world_t() {
+        int width = octree_chunk_t::getBlockWidth(maximum_octree_size);
+        int wwidth = width * 3;
+        int half = wwidth / 2;
+        int playerx0 = ((int)cameraPos.x % wwidth) - half;
+        int playery0 = ((int)cameraPos.y % wwidth) - half;
+        int playerz0 = ((int)cameraPos.z % wwidth) - half;
+        for (int x = 0; x < 3; x++) {
+            for (int y = 0; y < 3; y++) {
+                for (int z = 0; z < 3; z++) {
+                    chunks[(x * 9) + (y * 3) + z] = new octree_chunk_t(maximum_octree_size, vec3d{
+                        playerx0 + (x * width),
+                        playery0 + (y * width),
+                        playerz0 + (z * width)
+                    });
+                }
+            }
+        }
+    }
 
     fullblock_t getBlockAtAbsolute(vec3d pos) override {
-        return chunks->getBlockAtAbsolute(pos);
+        return getBlockAtRelative(pos);
     }
 
     fullblock_t getBlockAtRelative(vec3d pos) override {
@@ -871,16 +1049,21 @@ struct world_t : public blockaccessor_t {
         //    if (chunk->isBlockLoaded(pos))
         //        return chunk->getBlockAtAbsolute(pos);
         //}
+        for (int i = 0; i < slot_count; i++)
+            if (chunks[i]->isBlockLoaded(pos))
+                return chunks[i]->getBlockAtAbsolute(pos);
+        //default
+        return chunks[0]->getBlockAtAbsolute(pos);
 
-        return chunks->getBlockAtRelative(pos);
+        //return chunks->getBlockAtRelative(pos);
     }
 
     bool isBlockLoaded(vec3d pos) override {
-        //for (auto chunk : chunks)
-        //    if (chunk->isBlockLoaded(pos))
-        //        return true;
-        //return false;
-        return chunks->isBlockLoaded(pos);
+        for (int i = 0; i < slot_count; i++)
+            if (chunks[i]->isBlockLoaded(pos))
+                return true;
+        return false;
+        //return chunks->isBlockLoaded(pos);
     }
 
     bool isAvailable() override {
@@ -940,6 +1123,7 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                 for (int i = 0; i < 8; i++) {
                     octree_chunk_t* child = &children[i];
                     //if (!child->needsToRender()) {
+                        child->is_dependent_meshing();
                         child->mesh(buffer, index); //Nothing renders if this is commented out
                     //} else {
                     //    childNotMeshed = false;
@@ -1008,7 +1192,6 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                                     puts("Could not resize buffers");
                                     //exit(1);b
                                     printf("%i/%i %p\n", *index, info_max, index);
-                                    break;
                                 }
                             
                                 float factor = (1.0f/16.0f);
@@ -1050,11 +1233,14 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                             if (isVisible(x, y + 1, z))
                                 _addFace(TOP_FACE);
 
+                if ((*index) + 2 > info_max)
+                    goto no_resize;
+
                 }
             }
         }
 
-
+        no_resize:;
 
         //size == 2, mesh blocks
 }
@@ -1208,6 +1394,8 @@ struct text_renderer_t {
     }
 } *debug_info;
 
+
+
 void start_game() {
     puts("Starting game");
     printf("minimum_block_width:%i\n", minimum_block_width);
@@ -1224,6 +1412,11 @@ void start_game() {
     block_t::stone = new block_t(2, 1, 0, 2, 1);
     block_t::dirt = new block_t(3, 2, 0, 3, 1);
 
+    workerTasks = std::queue<workerTask_t*>();
+    
+    for (int i = 0; i < workerThreadCount; i++)
+        workerThreads[i] = std::thread(workerLoop);
+    
     currentGame.currentWorld = new world_t();
 
     debug_info = new text_renderer_t();
@@ -1243,7 +1436,11 @@ void start_game() {
 void game_t::render() {
     glUseProgram(shaderProgram);
     drawen_buffers = 0;
-    currentWorld->chunks->render();
+    meshPerFrame = 0;
+    //currentWorld->chunks->render();
+    currentWorld->set_chunks();
+    for (int i = 0; i < currentWorld->slot_count; i++)
+        currentWorld->chunks[i]->render();
     debug_info->render();
     glUseProgram(shaderProgram);
     //printf("Drew %i buffers\n", drawen_buffers);
@@ -1609,6 +1806,13 @@ void key_frame(GLFWwindow *window) {
 	if (glfwGetKey(window, GLFW_KEY_2) == cond) {
 		selectedBlock = ++selectedBlock % 1;
 	}	
+    if (glfwGetKey(window, GLFW_KEY_R) == cond) {
+        //currentGame.currentWorld->chunks->~octree_chunk_t();
+        //currentGame.currentWorld->chunks = new octree_chunk_t(maximum_octree_size, vec3d{
+        //cameraPos.x - octree_chunk_t::getBlockWidth(maximum_octree_size-1),
+        //cameraPos.y - octree_chunk_t::getBlockWidth(maximum_octree_size-1),
+        //cameraPos.z - octree_chunk_t::getBlockWidth(maximum_octree_size-1)});
+    }
 	if(glfwGetKey(window, GLFW_KEY_F) == cond)
 		glfwSetWindowMonitor(window, monitor, 0, 0, 1920, 1080, 0);
 	if (glfwGetKey(window, GLFW_KEY_KP_DECIMAL) == cond)
