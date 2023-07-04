@@ -6,6 +6,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <vector>
 #include <fstream>
+#include <chrono>
 #include <sstream>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -1396,6 +1397,11 @@ int loadTexture(const char* path) {
 }
 
 int main() {
+    int frameCount = 0;
+    double fps;
+    std::chrono::time_point<std::chrono::high_resolution_clock> start, end;
+
+    start = std::chrono::high_resolution_clock::now();
     // Initialize GLFW
     if (!glfwInit()) {
         std::cout << "Failed to initialize GLFW" << std::endl;
@@ -1407,7 +1413,7 @@ int main() {
     glfwSetErrorCallback(errorCallback);
 
     // Create a window
-    GLFWwindow* window = glfwCreateWindow(800, 600, "OpenGL Window", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(800, 450, "OpenGL Window", NULL, NULL);
     if (!window) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -1445,7 +1451,7 @@ int main() {
 
 	uniModel = glGetUniformLocation(shaderProgram, "model");
 	uniView = glGetUniformLocation(shaderProgram, "view");
-	proj = glm::perspective(glm::radians(90.0f), 1440.0f / 900.0f, 0.1f, 500.0f);
+	proj = glm::perspective(glm::radians(90.0f), 1920.0f / 1080.0f, 0.1f, 500.0f);
     GLint uniProj = glGetUniformLocation(shaderProgram, "proj");
     glUniformMatrix4fv(uniProj, 1, GL_FALSE, glm::value_ptr(proj));
 	
@@ -1544,9 +1550,21 @@ int main() {
         
 
         //printf("\rX: %f, Y: %f, Z: %f", cameraPos.x, cameraPos.y, cameraPos.z);
+        frameCount++;
+        end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> duration = end - start;
+        if (duration.count() >= 1.0) {
+            // Calculate the FPS for the last second
+            fps = frameCount / duration.count();
+
+            // Reset the frame count and timer
+            frameCount = 0;
+            start = std::chrono::high_resolution_clock::now();
+        }
+
         char char_buf[1000];
         fullblock_t lookingAt = currentGame.getPlayerLookingAt(vec3d{cameraPos.x, cameraPos.y, cameraPos.z}, vec3d{cameraFront.x, cameraFront.y, cameraFront.z});
-        snprintf(char_buf, 1000, "<%.2f,%.2f,%.2f>\nBuffers: %i\nLooking At: <%i,%i,%i>:%i", cameraPos.x, cameraPos.y, cameraPos.z, drawen_buffers,
+        snprintf(char_buf, 1000, "FPS: %.0f\n<%.2f,%.2f,%.2f>\nBuffers: %i\nLooking At: <%i,%i,%i>:%i", fps, cameraPos.x, cameraPos.y, cameraPos.z, drawen_buffers,
         (int)lookingAt.position.x, (int)lookingAt.position.y, (int)lookingAt.position.z, lookingAt.state->blockId);
         debug_info->set_string(&char_buf[0]);
 
@@ -1592,7 +1610,7 @@ void key_frame(GLFWwindow *window) {
 		selectedBlock = ++selectedBlock % 1;
 	}	
 	if(glfwGetKey(window, GLFW_KEY_F) == cond)
-		glfwSetWindowMonitor(window, monitor, 0, 0, 1440, 900, 0);
+		glfwSetWindowMonitor(window, monitor, 0, 0, 1920, 1080, 0);
 	if (glfwGetKey(window, GLFW_KEY_KP_DECIMAL) == cond)
 		showTriangles = !showTriangles;
 	if (glfwGetKey(window, GLFW_KEY_KP_0) == cond) {
