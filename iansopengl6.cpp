@@ -44,6 +44,9 @@ GLint uniView;
 GLuint shaderProgram;
 GLuint textureId;
 GLuint textureWireframeId;
+GLuint fontTextureId;
+GLuint textShaderProgram;
+bool printDebugInfo = false;
 GLFWmonitor* monitor = glfwGetPrimaryMonitor();
 void key_callback(GLFWwindow* window);
 void key_frame(GLFWwindow* window);
@@ -286,9 +289,15 @@ struct game_t {
     std::vector<vec3d> vectorData;
     void render();
     void mesh(chunk_t *chunk);
+    fullblock_t getPlayerLookingAt(vec3d pos, vec3d front);
 };
 
 struct blockstate_t {
+    blockstate_t(short blockId) {
+        this->blockId = blockId;
+    }
+    blockstate_t() {
+    }
     short blockId;
 };
 
@@ -297,14 +306,20 @@ struct block_t {
 
     static block_t *air;
     static block_t *stone;
+    static block_t *grass;
+    static block_t *dirt;
 
     block_t() {
         blockId = 0;
         
     }
 
-    block_t(int blockId) {
+    block_t(int blockId, char t0, char t1, char t2, char t3) {
         this->blockId = blockId;
+        textureAtlas[0] = t0;
+        textureAtlas[1] = t1;
+        textureAtlas[2] = t2;
+        textureAtlas[3] = t3;
         blocks.push_back(this);
     }
 
@@ -315,25 +330,53 @@ struct block_t {
         return ret;
     }
 
+	virtual unsigned char getTexture(int triangle, int vertex, int index) {
+		int map[2][3][2] = {
+			//New order 0 - 1 - 2  2 - 3 - 0
+			//Old order 0 - 2 - 1  3 - 1 - 0
+			{ //Triangle 0
+				{ //Vertex 0
+					0, 3
+				}, 
+				{ //Vertex 1
+					2, 3
+				}, 
+				{ //Vertex 2
+					2, 1
+				}
+			},
+			{ //Triangle 1
+				{ //Vertex 0
+					0, 3
+				},
+				{ //Vertex 1
+					2, 1
+				},
+				{ //Vertex 2
+					0, 1
+				}
+			}			
+		};
+						
+		return textureAtlas[map[triangle % 2][vertex][index]];
+	}
+
     int blockId;  
+	unsigned char textureAtlas[4];
 };
 
 std::vector<block_t*> block_t::blocks;
 block_t *block_t::air;
+block_t *block_t::grass;
 block_t *block_t::stone;
+block_t *block_t::dirt;
 
-struct air : public block_t {
-    air():block_t(0){}
-};
-
-struct stone : public block_t {
-    stone():block_t(1){}
-};
+blockstate_t nothing(1);
 
 struct fullblock_t {
     fullblock_t() {
-        state = nullptr;
-        block = nullptr;
+        state = &nothing;
+        block = block_t::stone;
     }
     vec3d position;
     blockstate_t *state;
@@ -351,7 +394,20 @@ static union _draw_type {
     struct { float x,y,z,u,v,i,a; } a;
     float p[7];
 } *draw_buffer = 0;
-                    
+
+static struct _text_draw {
+    _text_draw() {
+        
+    }
+    _text_draw(float x, float y, float u, float v) {
+        this->x = x;
+        this->y = y;
+        this->u = u;
+        this->v = v;
+    }
+    float x, y, u, v;
+} *text_buffer = 0;
+
 int map[2][3][2] = {
     //New order 0 - 1 - 2  2 - 3 - 0
     //Old order 0 - 2 - 1  3 - 1 - 0
@@ -384,11 +440,14 @@ int drawen_buffers;
 
 const int minimum_octree_size = 2;
 const int minimum_block_width = 32;
-const int minimum_render_octree = 3;
-const int maximum_octree_size = 4;
+const int minimum_render_octree = 2;
+const int maximum_octree_size = 5;
 
 struct octree_chunk_t : public blockaccessor_t {
     fullblock_t getBlockAtAbsolute(vec3d pos) override {
+        //printf(".");
+
+
         int width = getBlockWidth(size);
         int halfwidth = width;
 
@@ -396,9 +455,14 @@ struct octree_chunk_t : public blockaccessor_t {
 
         fullblock_t nothing_to_return;
         static blockstate_t *nothing_blockstate = new blockstate_t();
-        nothing_blockstate->blockId = -1;
-        nothing_to_return.block = block_t::air;
+        nothing_blockstate->blockId = 1;
+        nothing_to_return.block = block_t::stone;
         nothing_to_return.state = nothing_blockstate;
+
+        if (printDebugInfo) {
+            fprintf(stderr, "Size: %i, width: %i, pX: %i, pY: %i, pZ: %i, bX: %i, bY: %i, bZ: %i\n", size, width, 
+            (int)position.x, (int)position.y, (int)position.z, (int)pos.x, (int)pos.y, (int)pos.z);
+        }
 
         if (pos.x < position.x ||
             pos.x >= position.x + halfwidth ||
@@ -406,17 +470,26 @@ struct octree_chunk_t : public blockaccessor_t {
             pos.y >= position.y + halfwidth ||
             pos.z < position.z ||
             pos.z >= position.z + halfwidth) {
+                //printf("{%i,%i,%i} not in bounds\n", int(pos.x), int(pos.y), int(pos.z));
+                nothing_to_return.position.x = -15;
                 return nothing_to_return;
             }
 
         if (size > 2) {
-            int childx = (pos_rel.x)/width;
-            int childy = (pos_rel.y)/width;
-            int childz = (pos_rel.z)/width;
-            return children[(childz * 4) + (childy * 2) + childx].getBlockAtAbsolute(pos);
+            int cwidth = getBlockWidth(size-1);
+            int childx = float(pos_rel.x)/float(cwidth);
+            int childy = float(pos_rel.y)/float(cwidth);
+            int childz = float(pos_rel.z)/float(cwidth);
+            if (printDebugInfo) {
+                fprintf(stderr, "rX: %f, rY: %f, rZ: %f, cX: %f, cY: %f, cZ: %f\n", pos_rel.x, pos_rel.y, pos_rel.z, childx, childy, childz);
+            }
+            return children[int((childz * 4) + (childy * 2) + childx)].getBlockAtAbsolute(pos);
+            //return nothing_to_return;
         } else {
             if (!point) {
+                //printf("{%i,%i,%i} not allocated\n", int(pos.x), int(pos.y), int(pos.z));
                 //puts("Nothing here");
+                nothing_to_return.position.x = -14;
                 return nothing_to_return;
             }
 
@@ -431,9 +504,14 @@ struct octree_chunk_t : public blockaccessor_t {
             else
                 ret.block = block_t::air;
             ret.position = pos;
+
+            //printf("{%i,%i,%i} not in bounds\n", int(pos.x), int(pos.y), int(pos.z));
+            //printf("\n");
             return ret;
         }
 
+        //printf("{%i,%i,%i} we shouldn't be here\n", int(pos.x), int(pos.y), int(pos.z));
+        nothing_to_return.position.x = -13;
         return nothing_to_return;
     }
 
@@ -520,12 +598,15 @@ struct octree_chunk_t : public blockaccessor_t {
                 perlin::persistence = 0.55f;
                 //float scale = 0.005f;
                 float scale = 0.01f;
-                float height = 300.0f;
+                float height = 600.0f;
                 float value = perlin::getPerlin(ofx * scale + 16000.0f, ofz * scale + 16000.0f) * height + 10;
 
                 for (int y = 0; y < width; y++) {
-                    if (value - 1.0f > position.y + y)  
+                    if (value - 2.0f > position.y + y)  
                         point[(y * width * width) + (z * width) + x] = block_t::stone->getDefaultState();
+                    else
+                        if (value - 1.0f > position.y + y)
+                        point[(y * width * width) + (z * width) + x] = block_t::grass->getDefaultState();
                 }
             }
         }
@@ -546,7 +627,7 @@ struct octree_chunk_t : public blockaccessor_t {
         //float fact = float(minimum_block_width) / pow(2, 2);
         //return int(pow(2,size)) * fact;        
         //return (minimum_block_width * size) / 2.0f;
-        return 0.25f*minimum_block_width*pow(2, size);
+        return 0.25f*minimum_block_width*(1 << size);
     }
 
     bool needsToRender() {
@@ -706,9 +787,10 @@ struct octree_chunk_t : public blockaccessor_t {
             {glm::vec3(xMax, yMin, zMax), glm::vec3(xMax, yMax, zMax)},
         };
 
+        glUseProgram(shaderProgram);
+        glBindTexture(GL_TEXTURE_2D, textureWireframeId);
         // Use the edges to draw the wireframe cube
         glBegin(GL_LINES);
-        glBindTexture(GL_TEXTURE_2D, textureWireframeId);
         for (const auto& edge : edges) {
             const glm::vec3& v1 = edge.first;
             const glm::vec3& v2 = edge.second;
@@ -729,8 +811,8 @@ struct octree_chunk_t : public blockaccessor_t {
         // ... Continue adding lines for each edge of the cube
         glEnd();
         */
-        glBindTexture(GL_TEXTURE_2D, textureId);
 
+        glBindTexture(GL_TEXTURE_2D, textureId);
         //glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glBindVertexArray(vao);
         //glBindTexture(GL_TEXTURE_2D, textureId);
@@ -795,7 +877,7 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                                     printf("%i/%i %p\n", *index, info_max, index);
                                     break;
                                 }
-                                //break;
+                                break;
                                 float factor = (1.0f/16.0f);
                                 float textureAtlas[] = {1*factor,0*factor,2*factor,1*factor};
                                 //SHOWS ONLY ONES INDIVIDUALLY RENDERED BECAUSE OF APOSITION SHADER
@@ -894,7 +976,10 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                             
                                 float factor = (1.0f/16.0f);
                                 //float textureAtlas[] = {7*factor,0*factor,8*factor,1*factor};
-                                float textureAtlas[] = {0*factor,0*factor,1*factor,1*factor};
+                                float textureAtlas[] = {fb.block->textureAtlas[0]*factor,
+                                                        fb.block->textureAtlas[1]*factor,
+                                                        fb.block->textureAtlas[2]*factor,
+                                                        fb.block->textureAtlas[3]*factor};
 
                                 draw_buffer[*index].a.x = positionCube3[(l * 9) + (l1 * 3) + 0] + float(x + ofx);
                                 draw_buffer[*index].a.y = positionCube3[(l * 9) + (l1 * 3) + 1] + float(y + ofy);
@@ -938,6 +1023,154 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
         //size == 2, mesh blocks
 }
 
+fullblock_t game_t::getPlayerLookingAt(vec3d origin, vec3d front) {
+    fullblock_t block;
+    for (float ray = 0.0f; ray < 5.0f; ray += 0.1f) {
+        float rx, ry, rz;
+        float bx, by, bz;
+        //x = sinCFXPI * ray;
+        //y = sinCFYPI * ray;
+        //z = sinCFZPI * ray;
+        rx = front.x * ray;
+        ry = front.y * ray;
+        rz = front.z * ray;
+        
+        bx = rx + origin.x - 1;
+        by = ry + origin.y - 1;
+        bz = rz + origin.z - 1;
+        
+        //printDebugInfo = true;
+        block = currentWorld->getBlockAtAbsolute(vec3d{rx + cameraPos.x, ry + cameraPos.y, rz + cameraPos.z});
+        //printDebugInfo = false;
+        //printf("\r\t\t\t\t%f %f %f", bx, by, bz);
+        
+        if (block.state->blockId == 0) {
+            //worldObj->player.prevBlockLookingAt = { rx + cameraPos.x, ry + cameraPos.y, rz + cameraPos.z };
+            if (!(ray + 0.1f < 5.0f)) {
+                //worldObj->player.prevBlockLookingAt = { -99999, 99999, 12345 };
+            }
+            continue;
+        }
+    }
+    return block;
+}
+
+struct text_renderer_t {
+    std::string string_buffer;
+    GLuint vbo, vao; 
+    int currentY, currentX;
+    float screenX, screenY;
+    bool changed;
+    int info_count;
+    const int vertex_max = 10000;
+    
+
+    text_renderer_t() {
+        vbo = 0;
+        vao = 0;
+        changed = true;
+        info_count = 0;
+        currentX = 0;
+        currentY = 0;
+        screenX = 0;
+        screenY = 0;
+
+        glGenBuffers(1, &vbo);
+        glGenVertexArrays(1, &vao);
+
+        if (!text_buffer) {
+            text_buffer = new _text_draw[vertex_max];
+        }
+
+        //string_buffer = std::string("Hello World!\n2 lines!");
+    }
+
+    void set_string(const char *str) {
+        string_buffer = std::string(str);
+        changed = true;
+    }
+
+    void add_character(int character) {
+        const float fontWidth = 1.0f / 16.0f;
+        const float fontHeight = 1.0f / 16.0f;
+        const float screenWidth = 1.0f / 16.0f;
+        const float screenHeight = 1.0f / 16.0f;
+        float sX = screenX - 1.0f;
+        float sY = screenY - (1.0f - screenHeight);
+        _text_draw verticies[6] = {
+            {sX,sY,0,0},
+            {sX+screenWidth,sY,fontWidth,0},
+            {sX,sY+screenHeight,0,fontHeight},
+            {sX+screenWidth,sY,fontWidth,0},
+            {sX+screenWidth,sY+screenHeight,fontWidth,fontHeight},
+            {sX,sY+screenHeight,0,fontHeight}
+        };
+        
+        float textX = (character % 16) * fontWidth;
+        float textY = (character / 16 % 16) * fontHeight;
+        float posX = currentX * screenWidth;
+        float posY = currentY * screenHeight;
+
+        for (int i = 0; i < 6; i++) {
+            text_buffer[info_count].x = verticies[i].x + posX;
+            text_buffer[info_count].y = -verticies[i].y + (screenHeight - posY);
+            text_buffer[info_count].u = verticies[i].u + textX;
+            text_buffer[info_count].v = verticies[i].v + textY; 
+
+            info_count++;
+        }
+    }
+
+    void mesh() {
+        //fprintf(stderr, "Meshing Text Buffer\n");            
+        info_count = 0;
+        currentX = 0;
+        currentY = 0;
+        memset(text_buffer, 0, sizeof(*text_buffer) * vertex_max);
+
+        for (auto ch : string_buffer) {
+            if (ch == '\n') {
+                currentY++;
+                currentX = 0;
+                continue;
+            }
+                
+            add_character(ch);
+            currentX++;
+        }
+
+        changed = false;
+
+        if (info_count == 0)
+            return;
+
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+
+        glBufferData(GL_ARRAY_BUFFER, info_count * sizeof(*text_buffer), text_buffer, GL_STATIC_DRAW);
+
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, 0);
+        glEnableVertexAttribArray(0);
+
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, 8);
+        glEnableVertexAttribArray(1);
+
+        //printf("Uploaded %i text verticies\n", info_count);
+    }
+
+    void render() {
+        if (changed)
+            mesh();
+
+        glUseProgram(textShaderProgram);
+        glBindTexture(GL_TEXTURE_2D, fontTextureId);
+        glBindVertexArray(vao);
+        glm::mat4 model = glm::translate(glm::mat4(1.0), vec3d{0,0,0});
+        glUniformMatrix4fv(uniModel, 1, GL_FALSE, glm::value_ptr(model));
+        glDrawArrays(GL_TRIANGLES, 0, info_count);
+        glBindVertexArray(0);
+    }
+} *debug_info;
 
 void start_game() {
     puts("Starting game");
@@ -950,10 +1183,14 @@ void start_game() {
     printf("\n");
     //exit(1);
 
-    block_t::air = new air;
-    block_t::stone = new stone;
+    block_t::air = new block_t(0, 0,0,0,0);
+    block_t::grass = new block_t(1, 0, 0, 1, 1);
+    block_t::stone = new block_t(2, 1, 0, 2, 1);
+    block_t::dirt = new block_t(3, 2, 0, 3, 1);
 
     currentGame.currentWorld = new world_t();
+
+    debug_info = new text_renderer_t();
     /*
     for (int x = 0; x < 3; x++) {
         for (int z = 0; z < 3; z++) {
@@ -968,9 +1205,12 @@ void start_game() {
 }
 
 void game_t::render() {
+    glUseProgram(shaderProgram);
     drawen_buffers = 0;
     currentWorld->chunks->render();
-    printf("Drew %i buffers\n", drawen_buffers);
+    debug_info->render();
+    glUseProgram(shaderProgram);
+    //printf("Drew %i buffers\n", drawen_buffers);
     /*
     std::vector<chunk_t*> *chunks = &currentWorld->chunks;
     //fprintf(stderr, "Rendering");
@@ -1052,50 +1292,41 @@ bool linkProgram(GLuint programId, GLuint vertexShaderId, GLuint fragmentShaderI
     return true;
 }
 
-int figureOutShaders() {
+GLuint figureOutShaders(const char* prefix) {
         // Load and compile vertex shader
-    std::string *vertexShaderSource =(readShaderFile("vertex_shader.glsl"));
+    GLuint program_ret;
+
+    std::string vertex_shader_path = std::string(prefix) + std::string("vertex_shader.glsl");
+    std::string fragment_shader_path = std::string(prefix) + std::string("fragment_shader.glsl");
+
+    std::string *vertexShaderSource =(readShaderFile(vertex_shader_path.c_str()));
     const char* vertexShaderSourcePtr = vertexShaderSource->c_str();
     GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
     if (!compileShader(vertexShader, vertexShaderSourcePtr)) {
         glfwTerminate();
-        return -1;
+        return 0;
     }
 
     // Load and compile fragment shader
-    std::string *fragmentShaderSource = (readShaderFile("fragment_shader.glsl"));
+    std::string *fragmentShaderSource = (readShaderFile(fragment_shader_path.c_str()));
     const char* fragmentShaderSourcePtr = fragmentShaderSource->c_str();
     GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
     if (!compileShader(fragmentShader, fragmentShaderSourcePtr)) {
         glfwTerminate();
-        return -1;
+        return 0;
     }
 
     // Create shader program and link shaders
-    shaderProgram = glCreateProgram();
-    if (!linkProgram(shaderProgram, vertexShader, fragmentShader)) {
+    program_ret = glCreateProgram();
+    if (!linkProgram(program_ret, vertexShader, fragmentShader)) {
         glfwTerminate();
-        return -1;
+        return 0;
     }
 
     // Use the shader program
-    glUseProgram(shaderProgram);
+    glUseProgram(program_ret);
 
-	uniModel = glGetUniformLocation(shaderProgram, "model");
-	
-	
-	uniView = glGetUniformLocation(shaderProgram, "view");
-	
-	
-	/*glm::mat4*/ proj = glm::perspective(glm::radians(90.0f), 1440.0f / 900.0f, 0.1f, 500.0f);
-	//frust.SetFrustum(90.0f, 1440.0f / 900.0f, 0.1f, 500.0f);
-    GLint uniProj = glGetUniformLocation(shaderProgram, "proj");
-    glUniformMatrix4fv(uniProj, 1, GL_FALSE, glm::value_ptr(proj));
-	
-    //delete vertexShaderSource;
-    //delete vertexShaderSourcePtr;
-    //delete fragmentShaderSource;
-    //delete fragmentShaderSourcePtr;
+    return program_ret;
 }
 
 int loadTexture(const char* path) {
@@ -1158,17 +1389,38 @@ int main() {
         return -1;
     }
 
-    if (figureOutShaders()) {
+    if (!(textShaderProgram = figureOutShaders("text_"))) {
+        std::cout << "Can't load text shaders" << std::endl;
+        return -1;
+    }
+
+    GLuint textuniproj = glGetUniformLocation(textShaderProgram, "projection");
+    glm::mat4 text_projection = glm::ortho(0.0f, 800.0f, 0.0f, 600.0f);
+    glUniformMatrix4fv(textuniproj, 1, GL_FALSE, glm::value_ptr(text_projection));
+
+    fontTextureId = loadTexture("text.png");
+
+    GLint fontTextureSamplerLocation = glGetUniformLocation(textShaderProgram, "text");
+    glUniform1i(fontTextureSamplerLocation, 0);
+
+    if (!(shaderProgram = figureOutShaders(""))) {
         std::cout << "Can't into shaders" << std::endl;
         return -1;
     }
 
+	uniModel = glGetUniformLocation(shaderProgram, "model");
+	uniView = glGetUniformLocation(shaderProgram, "view");
+	proj = glm::perspective(glm::radians(90.0f), 1440.0f / 900.0f, 0.1f, 500.0f);
+    GLint uniProj = glGetUniformLocation(shaderProgram, "proj");
+    glUniformMatrix4fv(uniProj, 1, GL_FALSE, glm::value_ptr(proj));
+	
     textureId = loadTexture("terrain.png");
     textureWireframeId = loadTexture("wireframe_color.png");
 
     // Set the texture unit for the shader
     GLint textureSamplerLocation = glGetUniformLocation(shaderProgram, "textureSampler");
     glUniform1i(textureSamplerLocation, 0);
+
 
 
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
@@ -1234,10 +1486,10 @@ int main() {
 		deltaTime = currentFrame - lastFrame;
 		lastFrame = currentFrame;  
         key_callback(window);
+
+        glUseProgram(shaderProgram);
 		view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
 		glUniformMatrix4fv(uniView, 1, GL_FALSE, glm::value_ptr(view));
-        // Swap front and back buffers
-
         glm::mat4 model = glm::translate(glm::mat4(1.0), glm::vec3(0,0,0));
         glUniformMatrix4fv(uniModel, 1, GL_FALSE, glm::value_ptr(model));
         const glm::vec3 sunLight(0.5f, 0.8f, 1.0f);
@@ -1253,11 +1505,16 @@ int main() {
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 		
+        currentGame.render();
         
-         glUseProgram(shaderProgram);
 
-        printf("\rX: %f, Y: %f, Z: %f", cameraPos.x, cameraPos.y, cameraPos.z);
-        
+        //printf("\rX: %f, Y: %f, Z: %f", cameraPos.x, cameraPos.y, cameraPos.z);
+        char char_buf[1000];
+        fullblock_t lookingAt = currentGame.getPlayerLookingAt(vec3d{cameraPos.x, cameraPos.y, cameraPos.z}, vec3d{cameraFront.x, cameraFront.y, cameraFront.z});
+        snprintf(char_buf, 1000, "<%.2f,%.2f,%.2f>\nBuffers: %i\nLooking At: <%i,%i,%i>:%i", cameraPos.x, cameraPos.y, cameraPos.z, drawen_buffers,
+        (int)lookingAt.position.x, (int)lookingAt.position.y, (int)lookingAt.position.z, lookingAt.state->blockId);
+        debug_info->set_string(&char_buf[0]);
+
         glBindBuffer(GL_ARRAY_BUFFER, vbo_test);
         glDrawArrays(GL_TRIANGLES, 0, 12*3);
 
@@ -1273,7 +1530,6 @@ int main() {
         
 
 
-        currentGame.render();
 
 
         // Poll for and process events
