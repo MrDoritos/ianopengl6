@@ -519,16 +519,10 @@ struct octree_chunk_t : public blockaccessor_t {
             (int)position.x, (int)position.y, (int)position.z, (int)pos.x, (int)pos.y, (int)pos.z);
         }
 
-        if (pos.x < position.x ||
-            pos.x >= position.x + halfwidth ||
-            pos.y < position.y||
-            pos.y >= position.y + halfwidth ||
-            pos.z < position.z ||
-            pos.z >= position.z + halfwidth) {
-                //printf("{%i,%i,%i} not in bounds\n", int(pos.x), int(pos.y), int(pos.z));
-                nothing_to_return.position.x = -15;
-                return nothing_to_return;
-            }
+        if (!isBlockLoaded(pos)) {
+            nothing_to_return.position.x = -15;
+            return nothing_to_return;
+        }
 
         if (size > 2) {
             int cwidth = getBlockWidth(size-1);
@@ -579,6 +573,15 @@ struct octree_chunk_t : public blockaccessor_t {
     }
 
     bool isBlockLoaded(vec3d pos) override {
+        int width = getBlockWidth(size);
+        if (pos.x < position.x ||
+            pos.x >= position.x + width ||
+            pos.y < position.y||
+            pos.y >= position.y + width ||
+            pos.z < position.z ||
+            pos.z >= position.z + width) {
+                return false;
+            }
         return true;
     }
 
