@@ -2,6 +2,8 @@
 #include <mutex>
 #include <vector>
 #include <queue>
+#include <deque>
+#include <algorithm>
 
 #define TASK_COMPLETED 1
 #define TASK_NOT_STARTED 0
@@ -49,7 +51,7 @@ struct worker {
     void stop() {
         puts("Stopping worker");
         {
-            std::unique_lock<std::mutex>(queue_lock);
+            std::unique_lock<std::mutex> lock(queue_lock);
             puts("Obtained lock");
 
             state = WORKER_STOPPING;
@@ -86,8 +88,12 @@ struct worker {
 
     void add_task(task* newtask) {
         {
-            std::unique_lock<std::mutex>(queue_lock);
-            task_queue.push(newtask);
+            std::unique_lock<std::mutex> lock(queue_lock);
+            if (std::find(task_queue.begin(), task_queue.end(), newtask) == task_queue.end()) {
+                task_queue.push_back(newtask);
+            } else {
+                printf("This task %p exists\n", newtask);
+            }
         }
     }
 
@@ -95,7 +101,7 @@ struct worker {
     int threads;
     int join_timeout;
     std::mutex queue_lock;
-    std::queue<task*> task_queue;
+    std::deque<task*> task_queue;
     std::vector<std::thread*> workers;
     static worker *INSTANCE;
 };
@@ -111,10 +117,14 @@ void worker_function() {
     while (worker::INSTANCE->state == WORKER_RUNNING) {
         task *new_task = 0;
         if (worker::INSTANCE->task_queue.size() > 0) {
-            std::unique_lock<std::mutex>(worker::INSTANCE->queue_lock);
-            if (worker::INSTANCE->task_queue.size() > 0) {
-                new_task = worker::INSTANCE->task_queue.front();
-                worker::INSTANCE->task_queue.pop();
+            {
+                std::unique_lock<std::mutex> lock(worker::INSTANCE->queue_lock);
+                if (worker::INSTANCE->task_queue.size() > 0) {
+                    new_task = worker::INSTANCE->task_queue.front();
+                    printf("New Task: %p\n", new_task);
+                    //worker::INSTANCE->task_queue.pop_front();
+                    worker::INSTANCE->task_queue.erase(worker::INSTANCE->task_queue.begin());
+                }
             }
         }
 

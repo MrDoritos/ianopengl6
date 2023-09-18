@@ -12,11 +12,13 @@
 #include <sstream>
 #include <unistd.h>
 #include <queue>
+#include <algorithm>
 
 #include "noise.h"
 #include "vertex.h"
 #include "glhelper.h"
 #include "block.h"
+#include "worker.h"
 
 struct dimension_t;
 struct game_t;
@@ -235,7 +237,8 @@ struct octree_chunk_t : public blockaccessor_t {
             //point[51] = state;
             //point[60] = state;
             //point[63] = state;
-            generate();
+            //generate();
+            generate_task();
         }
         if (size > minimum_octree_size) { //All sizes above 4x4x4 create children
             generate_children();
@@ -243,6 +246,7 @@ struct octree_chunk_t : public blockaccessor_t {
     }
 
     void generate() {
+        needsMeshed = true;
         int width = getBlockWidth(size);
         for (int y = 0; y < width; y++)
             for (int x = 0; x < width; x++)
@@ -283,8 +287,15 @@ struct octree_chunk_t : public blockaccessor_t {
         }
     }
 
+    void generate_task() {
+        currentTask = task((voidfunc)&octree_chunk_t::generate, (voidarg)this);
+        worker::INSTANCE->add_task(&currentTask);
+    }
+
+    task currentTask;
     GLuint vbo, vao; //size >= 5 32x32x32 or more
     blockstate_t *point; //size = 3 4x4x4
+    std::mutex point_mutex;
     const int size;
     octree_chunk_t *children; //size > 1
     bool has_children;
@@ -622,6 +633,23 @@ struct chunk_cache_t /*: public blockaccessor_t*/ {
 
     void free_chunk(vec3d origin) {
         //write to disk or whatever
+        printf("Freeing old chunk x:%.1f y:%.1f z:%.1f\n", origin.x, origin.y, origin.z);
+        octree_chunk_t *chunk = get_chunk(origin, true, false);
+        if (!chunk)
+            return;
+
+        if (chunk->currentTask.status == TASK_RUNNING) {
+            printf("Task for chunk is running, ignoring. Status: %i\n", chunk->currentTask.status);
+            return;
+        }
+
+        {
+            std::unique_lock<std::mutex> lock(cacheMutex);
+            auto index = std::find(cache.begin(), cache.end(), chunk);
+            cache.erase(index);
+
+            chunk->~octree_chunk_t();
+        }
     }
 };
 
@@ -653,6 +681,14 @@ struct dimension_t : public blockaccessor_t {
         int playerry0 = ((int)cameraPos.y) / width;
         int playerrz0 = ((int)cameraPos.z) / width;
 
+        {
+            for (octree_chunk_t *chunk : dimension_chunk_cache.cache) {
+                if (chunk->out_of_range())
+                    dimension_chunk_cache.free_chunk(chunk->position);
+            }
+        }
+
+        /*
         { //Test around the player and free unused chunks
             for (octree_chunk_t *chunk : dimension_chunk_cache.cache) { //may need to lock later
                 bool has = false;
@@ -677,9 +713,11 @@ struct dimension_t : public blockaccessor_t {
                 done:;
                 if (!has) {
                     printf("Does not have chunk cached. Free this chunk\n");
+                    dimension_chunk_cache.free_chunk(chunk->position);
                 }
             }
         }
+        */
 
         { //Test around the player and create chunks if they are not cached
             for (int xr = 0; xr < 3; xr++) {
@@ -1104,6 +1142,9 @@ void start_game() {
     }
     printf("\n");
     //exit(1);
+
+    worker *wrkr = new worker(3);
+    wrkr->start();
 
     block_t::air = new block_t(0, 0,0,0,0);
     block_t::grass = new block_t(1, 0, 0, 1, 1);
