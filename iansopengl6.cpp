@@ -18,7 +18,7 @@
 #include "glhelper.h"
 #include "block.h"
 
-struct world_t;
+struct dimension_t;
 struct game_t;
 struct blockaccessor_t;
 struct chunk_t;
@@ -54,13 +54,9 @@ void key_callback(GLFWwindow* window);
 void key_frame(GLFWwindow* window);
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
-	
-void errorCallback(int error, const char* description) {
-    std::cout << "GLFW Error: " << description << std::endl;
-}
 
 struct game_t {
-    struct world_t *currentWorld;
+    struct dimension_t *currentDimension;
     std::vector<vec3d> vectorData;
     void render();
     void mesh(chunk_t *chunk);
@@ -576,12 +572,67 @@ struct octree_chunk_t : public blockaccessor_t {
     }
 };
 
-struct world_t : public blockaccessor_t {
+struct chunk_cache_t /*: public blockaccessor_t*/ {
+    std::vector<octree_chunk_t*> cache;
+    std::mutex cacheMutex;
+
+    bool is_cached(vec3d origin) {
+        {
+            std::unique_lock<std::mutex> lock(cacheMutex);
+            for (octree_chunk_t* chunk : cache)
+                if (chunk->position.equals(origin, 0.1f))
+                    return true;
+            return false;
+        }
+    }
+
+    octree_chunk_t *get_cached(vec3d origin) {
+        {
+            std::unique_lock<std::mutex> lock(cacheMutex);
+            for (octree_chunk_t* chunk : cache)
+                if (chunk->position.equals(origin, 0.1f))
+                    return chunk;
+        }
+        return 0;
+    }
+
+    void add_cached(octree_chunk_t* chunk) {
+        {
+            std::unique_lock<std::mutex> lock(cacheMutex);
+            cache.push_back(chunk);
+        }
+    }
+
+    octree_chunk_t *get_chunk(vec3d origin, bool getCachedOnly, bool allowGeneration) {
+        //first check vector
+        if (is_cached(origin))
+            return get_cached(origin);
+
+        if (getCachedOnly)
+            return 0;
+
+        if (!allowGeneration)
+            return 0;
+
+        printf("Created new chunk x:%.1f y:%.1f z:%.1f\n", origin.x, origin.y, origin.z);
+        octree_chunk_t *new_chunk = new octree_chunk_t(maximum_octree_size, origin);
+        add_cached(new_chunk);
+        return new_chunk;
+    }
+
+    void free_chunk(vec3d origin) {
+        //write to disk or whatever
+    }
+};
+
+struct dimension_t : public blockaccessor_t {
     //std::vector<chunk_t*> chunks;
     const int slot_count = 27;
     //octree_chunk_t *chunks = new octree_chunk_t(maximum_octree_size, vec3d{0,0,0});
-    octree_chunk_t *chunks[27];
-    
+    //octree_chunk_t *chunks[27];
+
+    chunk_cache_t dimension_chunk_cache;
+
     void set_chunks() {
         int width = octree_chunk_t::getBlockWidth(maximum_octree_size);
         int wwidth = width * 3;
@@ -602,8 +653,35 @@ struct world_t : public blockaccessor_t {
         int playerry0 = ((int)cameraPos.y) / width;
         int playerrz0 = ((int)cameraPos.z) / width;
 
-        for (int i = 0; i < slot_count; i++) {
-            bool has = false;
+        { //Test around the player and free unused chunks
+            for (octree_chunk_t *chunk : dimension_chunk_cache.cache) { //may need to lock later
+                bool has = false;
+                for (int xr = 0; xr < 3; xr++)
+                    for (int yr = 0; yr < 3; yr++)
+                        for (int zr = 0; zr < 3; zr++) {
+                            int x = ((-((xr) & 1) * 2)+1) * ((xr+1)/2);
+                            int y = ((-((yr) & 1) * 2)+1) * ((yr+1)/2);
+                            int z = ((-((zr) & 1) * 2)+1) * ((zr+1)/2);
+                            int testx = (playerrx0 + x) * width;
+                            int testy = (playerry0 + y) * width;
+                            int testz = (playerrz0 + z) * width;
+
+                            vec3d test_origin = vec3d(testx, testy, testz);
+
+                            if (dimension_chunk_cache.is_cached(test_origin)) {
+                                has = true;
+                                goto done;
+                                break;
+                            }
+                        }
+                done:;
+                if (!has) {
+                    printf("Does not have chunk cached. Free this chunk\n");
+                }
+            }
+        }
+
+        { //Test around the player and create chunks if they are not cached
             for (int xr = 0; xr < 3; xr++) {
                 for (int yr = 0; yr < 3; yr++) {
                     for (int zr = 0; zr < 3; zr++) {
@@ -613,58 +691,18 @@ struct world_t : public blockaccessor_t {
                         int testx = (playerrx0 + x) * width;
                         int testy = (playerry0 + y) * width;
                         int testz = (playerrz0 + z) * width;
-                        
-                        if (chunks[i]) {
-                            if ((int)chunks[i]->position.x == testx &&
-                                (int)chunks[i]->position.y == testy &&
-                                (int)chunks[i]->position.z == testz) {
-                                    has = true;
-                                    goto done;
-                                    break;
-                              }
-                        }
-                    }
-                }
-            }
-            done:;
-            if (!has && chunks[i]) {
-                puts("chunk out of range");
-                chunks[i]->~octree_chunk_t();
-                chunks[i] = 0;
-            }
-        }
 
-        for (int xr = 0; xr < 3; xr++) {
-            for (int yr = 0; yr < 3; yr++) {
-                for (int zr = 0; zr < 3; zr++) {
-                    int x = ((-((xr) & 1) * 2)+1) * ((xr+1)/2);
-                    int y = ((-((yr) & 1) * 2)+1) * ((yr+1)/2);
-                    int z = ((-((zr) & 1) * 2)+1) * ((zr+1)/2);
-                    int testx = (playerrx0 + x) * width;
-                    int testy = (playerry0 + y) * width;
-                    int testz = (playerrz0 + z) * width;
+                        vec3d test_origin = vec3d(testx, testy, testz);
 
-                    bool has = false;
-                    for (int i = 0; i < slot_count; i++) {
-                        if (chunks[i]) {
-                            if ((int)chunks[i]->position.x == testx &&
-                                (int)chunks[i]->position.y == testy &&
-                                (int)chunks[i]->position.z == testz) {
-                                    has = true;
-                                    break;
-                                }
-                        }
-                    }
-                    if (has)
-                        continue;
+                        bool has = dimension_chunk_cache.is_cached(test_origin);
 
-                    //puts("doesn't have");
+                        if (has)
+                            continue;
 
-                    for (int i = 0; i < slot_count; i++) {
-                        if (!chunks[i]) {
-                            puts("allocated new chunk");
-                            chunks[i] = new octree_chunk_t(maximum_octree_size, vec3d{testx,testy,testz});
-                            return; //1 per frame
+                        if (dimension_chunk_cache.get_chunk(test_origin, false, true)) {
+                            puts("Allocated new chunk");
+                        } else {
+                            puts("Failed to allocate new chunk, return address 0");
                         }
                     }
                 }
@@ -672,13 +710,14 @@ struct world_t : public blockaccessor_t {
         }
     }
 
-    world_t() {
+    dimension_t() {
         int width = octree_chunk_t::getBlockWidth(maximum_octree_size);
         int wwidth = width * 3;
         int half = wwidth / 2;
         int playerx0 = ((int)cameraPos.x % wwidth) - half;
         int playery0 = ((int)cameraPos.y % wwidth) - half;
         int playerz0 = ((int)cameraPos.z % wwidth) - half;
+        /*
         for (int x = 0; x < 3; x++) {
             for (int y = 0; y < 3; y++) {
                 for (int z = 0; z < 3; z++) {
@@ -690,6 +729,7 @@ struct world_t : public blockaccessor_t {
                 }
             }
         }
+        */
     }
 
     fullblock_t getBlockAtAbsolute(vec3d pos) override {
@@ -701,9 +741,16 @@ struct world_t : public blockaccessor_t {
         //    if (chunk->isBlockLoaded(pos))
         //        return chunk->getBlockAtAbsolute(pos);
         //}
+        
+        /*
         for (int i = 0; i < slot_count; i++)
             if (chunks[i] && chunks[i]->isBlockLoaded(pos))
                 return chunks[i]->getBlockAtAbsolute(pos);
+        */
+        for (octree_chunk_t *chunk : dimension_chunk_cache.cache)
+            if (chunk->isBlockLoaded(pos))
+                return chunk->getBlockAtAbsolute(pos);
+
         //default
         fullblock_t nothing_fb;
         nothing_fb.block = block_t::stone;
@@ -715,8 +762,13 @@ struct world_t : public blockaccessor_t {
     }
 
     bool isBlockLoaded(vec3d pos) override {
+        /*
         for (int i = 0; i < slot_count; i++)
             if (chunks[i] && chunks[i]->isBlockLoaded(pos))
+                return true;
+        */
+        for (octree_chunk_t *chunk : dimension_chunk_cache.cache)
+            if (chunk->isBlockLoaded(pos))
                 return true;
         return false;
         //return chunks->isBlockLoaded(pos);
@@ -809,7 +861,7 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                         //return true;
                         //return false;
                         //puts("Out of chunk check");
-                        fullblock_t _fb = currentGame.currentWorld->getBlockAtAbsolute(vec3d{_x,_y,_z});
+                        fullblock_t _fb = currentGame.currentDimension->getBlockAtAbsolute(vec3d{_x,_y,_z});
                         if (_fb.state == nullptr)
                             return true;
                         return _fb.state->blockId == 0;
@@ -910,7 +962,7 @@ fullblock_t game_t::getPlayerLookingAt(vec3d origin, vec3d front) {
         bz = rz + origin.z - 1;
         
         //printDebugInfo = true;
-        block = currentWorld->getBlockAtAbsolute(vec3d{rx + cameraPos.x, ry + cameraPos.y, rz + cameraPos.z});
+        block = currentDimension->getBlockAtAbsolute(vec3d{rx + cameraPos.x, ry + cameraPos.y, rz + cameraPos.z});
         //printDebugInfo = false;
         //printf("\r\t\t\t\t%f %f %f", bx, by, bz);
         
@@ -1058,7 +1110,7 @@ void start_game() {
     block_t::stone = new block_t(2, 1, 0, 2, 1);
     block_t::dirt = new block_t(3, 2, 0, 3, 1);
 
-    currentGame.currentWorld = new world_t();
+    currentGame.currentDimension = new dimension_t();
 
     debug_info = new text_renderer_t();
     /*
@@ -1080,10 +1132,12 @@ void game_t::render() {
     meshPerFrame = 0;
     triangles = 0;
     //currentWorld->chunks->render();
-    currentWorld->set_chunks();
-    for (int i = 0; i < currentWorld->slot_count; i++)
-        if (currentWorld->chunks[i])
-            currentWorld->chunks[i]->render();
+    currentDimension->set_chunks();
+    //for (int i = 0; i < currentDimension->slot_count; i++)
+    //    if (currentDimension->chunks[i])
+    //        currentDimension->chunks[i]->render();
+    for (octree_chunk_t *chunk : currentDimension->dimension_chunk_cache.cache)
+        chunk->render();
     glDisable(GL_CULL_FACE);
     debug_info->render();
     glEnable(GL_CULL_FACE);
@@ -1291,7 +1345,7 @@ int main() {
 
         char char_buf[1000];
         fullblock_t lookingAt = currentGame.getPlayerLookingAt(vec3d{cameraPos.x, cameraPos.y, cameraPos.z}, vec3d{cameraFront.x, cameraFront.y, cameraFront.z});
-        snprintf(char_buf, 1000, "FPS: %.0f\n<%.2f,%.2f,%.2f>\nBuffers: %i\nLooking At: <%i,%i,%i>:%i\nTriangles: %i", fps, cameraPos.x, cameraPos.y, cameraPos.z, drawen_buffers,
+        snprintf(char_buf, 1000, "FPS: %.0f\n<%.2f,%.2f,%.2f>\nvbos: %i chunks: %i\nLooking At: <%i,%i,%i>:%i\nTriangles: %i", fps, cameraPos.x, cameraPos.y, cameraPos.z, drawen_buffers, currentGame.currentDimension->dimension_chunk_cache.cache.size(),
         (int)lookingAt.position.x, (int)lookingAt.position.y, (int)lookingAt.position.z, lookingAt.state->blockId, triangles / 3);
         debug_info->set_string(&char_buf[0]);
 
@@ -1400,13 +1454,13 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {	
     fullblock_t lookingAt = currentGame.getPlayerLookingAt(vec3d{cameraPos.x, cameraPos.y, cameraPos.z}, vec3d{cameraFront.x, cameraFront.y, cameraFront.z});
     if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
-		if (currentGame.currentWorld->isBlockLoaded(prevBlockLookingAt.position)) {
-            *currentGame.currentWorld->getBlockAtAbsolute(prevBlockLookingAt.position).state = block_t::dirt->getDefaultState();
+		if (currentGame.currentDimension->isBlockLoaded(prevBlockLookingAt.position)) {
+            *currentGame.currentDimension->getBlockAtAbsolute(prevBlockLookingAt.position).state = block_t::dirt->getDefaultState();
 		}
 	}
 	if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-		if (currentGame.currentWorld->isBlockLoaded(lookingAt.position)) {
-            *currentGame.currentWorld->getBlockAtAbsolute(lookingAt.position).state = block_t::air->getDefaultState();
+		if (currentGame.currentDimension->isBlockLoaded(lookingAt.position)) {
+            *currentGame.currentDimension->getBlockAtAbsolute(lookingAt.position).state = block_t::air->getDefaultState();
 		}
 	}	
 }

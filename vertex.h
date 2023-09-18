@@ -31,6 +31,14 @@ struct vec3d : public glm::vec3 {
     vec3d operator-(vec3d b) {
         return vec3d(x - b.x, y - b.y, z - b.z);
     }
+    bool operator==(vec3d b) {
+        return x == b.x && y == b.y && z == b.z;
+    }
+    bool equals(vec3d b, float tolerance) {
+        return fabs(x - b.x) <= tolerance &&
+               fabs(y - b.y) <= tolerance &&
+               fabs(z - b.z) <= tolerance;
+    }
 	vec3d(float xyz):vec3d(xyz,xyz,xyz){}
 };
 

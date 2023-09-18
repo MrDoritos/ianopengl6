@@ -10,6 +10,10 @@
 #include "stb_image.h"
 #include "vertex.h"
 
+void errorCallback(int error, const char* description) {
+    std::cout << "GLFW Error: " << description << std::endl;
+}
+
 inline std::string* readShaderFile(const char* filePath) {
     std::ifstream shaderFile(filePath);
     std::stringstream shaderStream;
