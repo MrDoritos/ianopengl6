@@ -12,19 +12,15 @@
 #include <sstream>
 #include <unistd.h>
 #include <queue>
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
-#include "noise.h"
 
-typedef unsigned int guint;
-typedef unsigned char guint8;
+#include "noise.h"
+#include "vertex.h"
+#include "glhelper.h"
+#include "block.h"
 
 struct world_t;
 struct game_t;
 struct blockaccessor_t;
-struct block_t;
-struct fullblock_t;
-struct blockstate_t;
 struct chunk_t;
 
 glm::mat4 proj;
@@ -58,178 +54,7 @@ void key_callback(GLFWwindow* window);
 void key_frame(GLFWwindow* window);
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
-
-const int workerThreadCount = 8;
-const int workerNoTaskWaitPeriod = 1000;
-
-struct workerTask_t {
-	int workerTaskResult;
-	void* arg1;
-	void(*workerTaskFunction)(void*);
-};
-
-std::thread workerThreads[workerThreadCount];
-
-std::queue<workerTask_t*> workerTasks;
-std::mutex workerTasksMux;
-std::mutex drawBufferMux;
 	
-void workerLoop() {
-	while (true) {
-			while (true) {
-				workerTask_t *wt;
-				{
-					std::lock_guard<std::mutex> lk(workerTasksMux);
-					if (workerTasks.size() < 1)
-						break;
-					wt = workerTasks.front();
-					workerTasks.pop();
-				}
-				wt->workerTaskFunction(wt->arg1);
-				delete wt;				
-			}
-		usleep(workerNoTaskWaitPeriod);
-		}
-	}
-
-void clear_taskqueue() {
-	std::lock_guard<std::mutex> lk(workerTasksMux);
-	while (workerTasks.size() > 0) {
-		delete workerTasks.front();
-		workerTasks.pop();
-	}
-}
-struct vec3d : public glm::vec3 {
-	vec3d(float x, float y, float z) {
-		this->x = x;
-		this->y = y;
-		this->z = z;
-	}
-	vec3d() {
-		this->x = 0;
-		this->y = 0;
-		this->z = 0;
-	}
-    vec3d operator+(vec3d b) {
-        return vec3d(x + b.x, y + b.y, z + b.z);
-    }
-
-    vec3d operator-(vec3d b) {
-        return vec3d(x - b.x, y - b.y, z - b.z);
-    }
-	vec3d(float xyz):vec3d(xyz,xyz,xyz){}
-};
-
-GLfloat textureCube3[] = {	
-    // Front face
-    0.0f, 1.0f, // top-right
-    1.0f, 0.0f, // bottom-right      
-    0.0f, 0.0f, // bottom-left  
-	
-    0.0f, 0.0f, // bottom-left
-    1.0f, 0.0f, // top-left       
-    1.0f, 1.0f, // top-right
-	
-    // Right face
-    1.0f, 0.0f, // top-left
-    1.0f, 1.0f, // top-right      
-    0.0f, 1.0f, // bottom-right          
-    0.0f, 1.0f, // bottom-right
-    0.0f, 0.0f, // bottom-left
-    1.0f, 0.0f, // top-left
-	
-    // Back face
-    0.0f, 0.0f, // Bottom-left
-    1.0f, 0.0f, // bottom-right    
-    1.0f, 1.0f, // top-right              
-    1.0f, 1.0f, // top-right
-    0.0f, 1.0f, // top-left
-    0.0f, 0.0f, // bottom-left                
-	
-    // Left face
-    0.0f, 1.0f, // bottom-left
-    1.0f, 0.0f, // top-right
-    1.0f, 1.0f, // top-left       
-	
-    0.0f, 1.0f, // bottom-left
-    0.0f, 0.0f, // bottom-right
-    1.0f, 0.0f, // top-right
-	
-	
-    // Bottom face          
-    0.0f, 1.0f, // top-right
-    1.0f, 1.0f, // top-left        
-    1.0f, 0.0f, // bottom-left
-	
-    1.0f, 0.0f, // bottom-left
-    0.0f, 0.0f, // bottom-right
-    0.0f, 1.0f, // top-right
-	
-    // Top face
-    0.0f, 1.0f, // top-left
-    1.0f, 1.0f, // top-right
-    1.0f, 0.0f, // bottom-right                 
-    1.0f, 0.0f, // bottom-right
-    0.0f, 0.0f, // bottom-left  
-    0.0f, 1.0f  // top-left              	
-};
-
-GLfloat positionCube3[] = {	
-	//Front BAD
-	1.0f, 0.0f, 0.0f,
-	0.0f, 0.0f, 0.0f,
-	0.0f, 1.0f, 0.0f,
-	
-	1.0f, 0.0f, 0.0f,
-	0.0f, 1.0f, 0.0f,
-	1.0f, 1.0f, 0.0f,
-	
-	//Right GOOD
-	1.0f, 0.0f, 1.0f,
-	1.0f, 0.0f, 0.0f,
-	1.0f, 1.0f, 0.0f,
-	
-	1.0f, 0.0f, 1.0f,
-	1.0f, 1.0f, 0.0f,
-	1.0f, 1.0f, 1.0f,
-	
-	//Back GOOD
-	0.0f, 0.0f, 1.0f,
-	1.0f, 0.0f, 1.0f,
-	1.0f, 1.0f, 1.0f,
-	
-	0.0f, 0.0f, 1.0f,
-	1.0f, 1.0f, 1.0f,
-	0.0f, 1.0f, 1.0f,
-			
-	//Left GOOD
-	0.0f, 0.0f, 0.0f,
-	0.0f, 0.0f, 1.0f,
-	0.0f, 1.0f, 1.0f,
-	
-	0.0f, 0.0f, 0.0f,
-	0.0f, 1.0f, 1.0f,
-	0.0f, 1.0f, 0.0f,
-	
-	//Bottom BAD
-	1.0f, 0.0f, 0.0f,
-	1.0f, 0.0f, 1.0f,
-	0.0f, 0.0f, 1.0f,
-	
-	1.0f, 0.0f, 0.0f,
-	0.0f, 0.0f, 1.0f,
-	0.0f, 0.0f, 0.0f,
-	
-	//Top GOOD
-	0.0f, 1.0f, 1.0f,
-	1.0f, 1.0f, 1.0f,
-	1.0f, 1.0f, 0.0f,
-	
-	0.0f, 1.0f, 1.0f,
-	1.0f, 1.0f, 0.0f,
-	0.0f, 1.0f, 0.0f,
-};
-
 void errorCallback(int error, const char* description) {
     std::cout << "GLFW Error: " << description << std::endl;
 }
@@ -240,106 +65,6 @@ struct game_t {
     void render();
     void mesh(chunk_t *chunk);
     fullblock_t getPlayerLookingAt(vec3d pos, vec3d front);
-};
-
-struct blockstate_t {
-    blockstate_t(short blockId) {
-        this->blockId = blockId;
-    }
-    blockstate_t() {
-    }
-    short blockId;
-};
-
-#define BOTTOM_FACE 4
-#define RIGHT_FACE 0
-#define LEFT_FACE 2
-#define BACK_FACE 3
-#define FRONT_FACE 1
-#define TOP_FACE 5
-
-struct block_t {
-    static std::vector<block_t*> blocks;
-
-    static block_t *air;
-    static block_t *stone;
-    static block_t *grass;
-    static block_t *dirt;
-
-    block_t() {
-        blockId = 0;
-        
-    }
-
-    block_t(int blockId, char t0, char t1, char t2, char t3) {
-        this->blockId = blockId;
-        textureAtlas[0] = t0;
-        textureAtlas[1] = t1;
-        textureAtlas[2] = t2;
-        textureAtlas[3] = t3;
-        blocks.push_back(this);
-    }
-
-
-    virtual blockstate_t getDefaultState() {
-        blockstate_t ret;
-        ret.blockId = blockId;
-        return ret;
-    }
-
-    virtual unsigned char getFaceBrightness(int face, fullblock_t fb);
-
-	virtual unsigned char getTexture(int triangle, int vertex, int index) {
-		int map[2][3][2] = {
-			//New order 0 - 1 - 2  2 - 3 - 0
-			//Old order 0 - 2 - 1  3 - 1 - 0
-			{ //Triangle 0
-				{ //Vertex 0
-					0, 3
-				}, 
-				{ //Vertex 1
-					2, 3
-				}, 
-				{ //Vertex 2
-					2, 1
-				}
-			},
-			{ //Triangle 1
-				{ //Vertex 0
-					0, 3
-				},
-				{ //Vertex 1
-					2, 1
-				},
-				{ //Vertex 2
-					0, 1
-				}
-			}			
-		};
-						
-		return textureAtlas[map[triangle % 2][vertex][index]];
-	}
-
-    int blockId;  
-	unsigned char textureAtlas[4];
-};
-
-std::vector<block_t*> block_t::blocks;
-block_t *block_t::air;
-block_t *block_t::grass;
-block_t *block_t::stone;
-block_t *block_t::dirt;
-
-blockstate_t nothing(-1);
-
-struct fullblock_t {
-    fullblock_t() {
-        state = &nothing;
-        block = block_t::stone;
-    }
-    vec3d position;
-    blockstate_t *state;
-    block_t *block;
 };
 
 fullblock_t prevBlockLookingAt;
@@ -368,33 +93,6 @@ static struct _text_draw {
     }
     float x, y, u, v;
 } *text_buffer = 0;
-
-int map[2][3][2] = {
-    //New order 0 - 1 - 2  2 - 3 - 0
-    //Old order 0 - 2 - 1  3 - 1 - 0
-    { //Triangle 0
-        { //Vertex 0
-            0, 3
-        }, 
-        { //Vertex 1
-            2, 3
-        }, 
-        { //Vertex 2
-            2, 1
-        }
-    },
-    { //Triangle 1
-        { //Vertex 0
-            0, 3
-        },
-        { //Vertex 1
-            2, 1
-        },
-        { //Vertex 2
-            0, 1
-        }
-    }			
-};
 
 game_t currentGame;
 int drawen_buffers;
@@ -1029,17 +727,6 @@ struct world_t : public blockaccessor_t {
     }
 };
 
-unsigned char block_t::getFaceBrightness(int face, fullblock_t fb) {
-    switch (face) {
-        case TOP_FACE:
-            return 255;
-        case BOTTOM_FACE:
-            return 127;
-        default:
-            return 191;
-    }
-}
-
 void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
         int ofx = position.x;
         int ofy = position.y;
@@ -1355,8 +1042,6 @@ struct text_renderer_t {
     }
 } *debug_info;
 
-
-
 void start_game() {
     puts("Starting game");
     printf("minimum_block_width:%i\n", minimum_block_width);
@@ -1373,11 +1058,6 @@ void start_game() {
     block_t::stone = new block_t(2, 1, 0, 2, 1);
     block_t::dirt = new block_t(3, 2, 0, 3, 1);
 
-    workerTasks = std::queue<workerTask_t*>();
-    
-    for (int i = 0; i < workerThreadCount; i++)
-        workerThreads[i] = std::thread(workerLoop);
-    
     currentGame.currentWorld = new world_t();
 
     debug_info = new text_renderer_t();
@@ -1439,123 +1119,6 @@ void game_t::render() {
 
     } 
     */ 
-}
-
-inline std::string* readShaderFile(const char* filePath) {
-    std::ifstream shaderFile(filePath);
-    std::stringstream shaderStream;
-    shaderStream << shaderFile.rdbuf();
-    std::string *ret = new std::string(shaderStream.str());
-    shaderFile.close();
-    return ret;
-}
-
-bool compileShader(GLuint shaderId, const char* shaderSource) {
-    glShaderSource(shaderId, 1, &shaderSource, nullptr);
-    glCompileShader(shaderId);
-
-    GLint compileStatus;
-    glGetShaderiv(shaderId, GL_COMPILE_STATUS, &compileStatus);
-    if (compileStatus == GL_FALSE) {
-        GLint logLength;
-        glGetShaderiv(shaderId, GL_INFO_LOG_LENGTH, &logLength);
-        std::string errorMessage(logLength, ' ');
-        glGetShaderInfoLog(shaderId, logLength, nullptr, &errorMessage[0]);
-        std::cout << "Shader compilation error: " << errorMessage << std::endl;
-        return false;
-    }
-
-    return true;
-}
-
-bool linkProgram(GLuint programId, GLuint vertexShaderId, GLuint fragmentShaderId) {
-    glAttachShader(programId, vertexShaderId);
-    glAttachShader(programId, fragmentShaderId);
-    glLinkProgram(programId);
-
-    GLint linkStatus;
-    glGetProgramiv(programId, GL_LINK_STATUS, &linkStatus);
-    if (linkStatus == GL_FALSE) {
-        GLint logLength;
-        glGetProgramiv(programId, GL_INFO_LOG_LENGTH, &logLength);
-        std::string errorMessage(logLength, ' ');
-        glGetProgramInfoLog(programId, logLength, nullptr, &errorMessage[0]);
-        std::cout << "Program linking error: " << errorMessage << std::endl;
-        return false;
-    }
-
-    glDetachShader(programId, vertexShaderId);
-    glDetachShader(programId, fragmentShaderId);
-
-    return true;
-}
-
-GLuint figureOutShaders(const char* prefix) {
-        // Load and compile vertex shader
-    GLuint program_ret;
-
-    std::string vertex_shader_path = std::string(prefix) + std::string("vertex_shader.glsl");
-    std::string fragment_shader_path = std::string(prefix) + std::string("fragment_shader.glsl");
-
-    std::string *vertexShaderSource =(readShaderFile(vertex_shader_path.c_str()));
-    const char* vertexShaderSourcePtr = vertexShaderSource->c_str();
-    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    if (!compileShader(vertexShader, vertexShaderSourcePtr)) {
-        glfwTerminate();
-        return 0;
-    }
-
-    // Load and compile fragment shader
-    std::string *fragmentShaderSource = (readShaderFile(fragment_shader_path.c_str()));
-    const char* fragmentShaderSourcePtr = fragmentShaderSource->c_str();
-    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    if (!compileShader(fragmentShader, fragmentShaderSourcePtr)) {
-        glfwTerminate();
-        return 0;
-    }
-
-    // Create shader program and link shaders
-    program_ret = glCreateProgram();
-    if (!linkProgram(program_ret, vertexShader, fragmentShader)) {
-        glfwTerminate();
-        return 0;
-    }
-
-    // Use the shader program
-    glUseProgram(program_ret);
-
-    return program_ret;
-}
-
-int loadTexture(const char* path) {
-    // Load texture using stb_image
-    int width, height, channels;
-    unsigned char* image = stbi_load(path, &width, &height, &channels, 0);
-    if (!image) {
-        std::cout << "Failed to load texture" << std::endl;
-        glfwTerminate();
-        return -1;
-    }
-
-    // Print texture information
-    std::cout << "Loaded texture: width = " << width << ", height = " << height << ", channels = " << channels << std::endl;
-
-
-        // Load texture into OpenGL
-    GLuint textureId;
-    glGenTextures(1, &textureId);
-    glBindTexture(GL_TEXTURE_2D, textureId);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image);
-    glGenerateMipmap(GL_TEXTURE_2D);
-
-    // Set texture wrapping and filtering options
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    return textureId;
 }
 
 int main() {
