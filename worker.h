@@ -89,11 +89,11 @@ struct worker {
     void add_task(task* newtask) {
         {
             std::unique_lock<std::mutex> lock(queue_lock);
-            if (std::find(task_queue.begin(), task_queue.end(), newtask) == task_queue.end()) {
+            //if (std::find(task_queue.begin(), task_queue.end(), newtask) == task_queue.end()) {
                 task_queue.push_back(newtask);
-            } else {
-                printf("This task %p exists\n", newtask);
-            }
+            //} else {
+            //    printf("This task %p exists\n", newtask);
+            //}
         }
     }
 
@@ -121,17 +121,18 @@ void worker_function() {
                 std::unique_lock<std::mutex> lock(worker::INSTANCE->queue_lock);
                 if (worker::INSTANCE->task_queue.size() > 0) {
                     new_task = worker::INSTANCE->task_queue.front();
-                    printf("New Task: %p\n", new_task);
+                    //printf("New Task: %p\n", new_task);
                     //worker::INSTANCE->task_queue.pop_front();
                     worker::INSTANCE->task_queue.erase(worker::INSTANCE->task_queue.begin());
                 }
             }
         }
 
-        if (new_task) {
+        if (new_task && new_task->function) {
             new_task->status = TASK_RUNNING;
             new_task->function(new_task->argument);
             new_task->status = TASK_COMPLETED;
+            //printf("Finished Task: %p\n", new_task);
         } else {
             worker_sleep(wait_timeout);
         }

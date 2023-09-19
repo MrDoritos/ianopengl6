@@ -189,10 +189,11 @@ struct octree_chunk_t : public blockaccessor_t {
         return true;
     }
 
+    /*
     octree_chunk_t() {
         has_children = false;
         is_meshable = false;
-        needsMeshed = true;
+        needsMeshed = false;
         waitingOnThread = false;
         children = 0;
         point = 0;
@@ -201,11 +202,12 @@ struct octree_chunk_t : public blockaccessor_t {
         info_count = 0;
         this->position = vec3d{0,0,0};
     }
+    */
 
     octree_chunk_t(int _size, vec3d _position) : size(_size) {
         has_children = false;
         is_meshable = false;
-        needsMeshed = true;
+        needsMeshed = false;
         waitingOnThread = false;
         children = 0;
         point = 0;
@@ -214,17 +216,21 @@ struct octree_chunk_t : public blockaccessor_t {
         info_count = 0;
         this->position = _position;
 
+        //state changes
+        state.loading = true;
+
         if (size >= minimum_octree_size) { //If 4x4x4 and above, we hold blocks and can render individually
             glGenBuffers(1, &vbo);
             glGenVertexArrays(1, &vao);
             is_meshable = true;
         }
         if (size == minimum_octree_size) { //If 4x4x4, we hold blocks
-            int width = getBlockWidth(size);
-            int volume = pow(width, 3);
-            point = new blockstate_t[volume];
-            memset(point, 0, sizeof(*point) * volume);
-            blockstate_t state = block_t::stone->getDefaultState();
+                int width = getBlockWidth(size);
+                int volume = pow(width, 3);
+                point = new blockstate_t[volume];
+                memset(point, 0, sizeof(*point) * volume);
+                blockstate_t state = block_t::stone->getDefaultState();
+                generate_task();
             //point[0] = block_t::stone->getDefaultState();
             //point[0] = block_t::stone->getDefaultState();
             //point[0] = block_t::stone->getDefaultState();
@@ -238,15 +244,17 @@ struct octree_chunk_t : public blockaccessor_t {
             //point[60] = state;
             //point[63] = state;
             //generate();
-            generate_task();
+            //printf("memory should be fucking allocated bitch");
         }
         if (size > minimum_octree_size) { //All sizes above 4x4x4 create children
             generate_children();
         }
+
+        state.loading = false;
+        state.loaded = true;
     }
 
     void generate() {
-        needsMeshed = true;
         int width = getBlockWidth(size);
         for (int y = 0; y < width; y++)
             for (int x = 0; x < width; x++)
@@ -285,11 +293,26 @@ struct octree_chunk_t : public blockaccessor_t {
                 }
             }
         }
+
+        //needsMeshed = true;
+        //generated = true;
+        needsMeshed = true;
+        generated = true;
+
+        //state changes
+        state.generated = true;
+        state.generating = false;
+        state.changed = true;
     }
 
     void generate_task() {
+        if (state.isGenerated())
+            return;
+        puts("Create generate task");
         currentTask = task((voidfunc)&octree_chunk_t::generate, (voidarg)this);
         worker::INSTANCE->add_task(&currentTask);
+        //generated = true;
+        //needsMeshed = true;
     }
 
     task currentTask;
@@ -300,8 +323,46 @@ struct octree_chunk_t : public blockaccessor_t {
     octree_chunk_t *children; //size > 1
     bool has_children;
     bool is_meshable;
+    bool generated;
     bool needsMeshed;
     bool waitingOnThread;
+    struct state_machine {
+        state_machine() {
+            memset(this, 0, sizeof(*this));
+        }
+        bool unloaded;
+        bool unloading;
+        bool loaded;
+        bool loading;
+        bool generated;
+        bool generating;
+        bool meshed;
+        bool meshing;
+        bool changed;
+        bool hasMeshDataToUpload;
+        bool isLoaded() {
+            return !unloaded && !unloading && !loading && loaded;
+        }
+        bool isWritable() {
+            return (!unloaded && !unloading && loaded) || loading;
+        }
+        bool isGenerated() {
+            return generated && !generating;
+        }
+        bool hasMesh() {
+            return meshed;
+        }
+        bool hasChanged() {
+            return changed;
+        }
+        bool needsMeshed() {
+            return isLoaded() && isGenerated() && changed;
+        }
+        void printState() {
+            printf("unloaded: %i, unloading: %i, loaded: %i, loading: %i, generated: %i, generating: %i, meshed: %i, meshing: %i, changed: %i, hasMeshDataToUpload: %i\n"
+            , unloaded, unloading, loaded, loading, generated, generating, meshed, meshing, changed, hasMeshDataToUpload);
+        }
+    } state;
     int info_count;
     vec3d position;
     static const int info_max = 800000;
@@ -398,28 +459,77 @@ struct octree_chunk_t : public blockaccessor_t {
 
     void mesh(_draw_type *buffer, int *index);
 
+    bool mesh_task() {
+        if (state.meshing) {
+            puts("Already a mesh task");
+            return;
+        }
+        puts("Create mesh task");
+        currentTask = task((voidfunc)&octree_chunk_t::static_init_mesh, (voidarg)&singleton_args);
+        worker::INSTANCE->add_task(&currentTask);
+    }
+
+    struct meshargs {
+        octree_chunk_t *self = 0;
+        _draw_type* buffer = 0;
+        int *index = 0;
+    } singleton_args;
+
+    static void static_init_mesh(meshargs *r) {
+        r->self->state.meshing = true;
+        r->self->mesh(r->buffer, r->index);
+        r->self->state.hasMeshDataToUpload = true;
+        r->self->state.meshing = false;
+        r->self->state.changed = false;
+    }
+
+    bool needsUploaded = false;
+
     void mesh_entrypoint() {
         //waitingOnThread = true;
-
         {
 			//std::lock_guard<std::mutex> lk(drawBufferMux);
             if (!draw_buffer) {
                 printf("Allocating %i entries\n", info_max);
                 draw_buffer = (_draw_type*)malloc(sizeof(_draw_type) * info_max);
             }
-            needsMeshed = false;
-            info_count = 0;
 
             //fprintf(stderr, "Meshing\n");            
-            mesh(draw_buffer, &info_count);
+            //mesh(draw_buffer, &info_count);
 
-            if (info_count == 0)
+            if (state.hasChanged() && !state.meshing) {
+                puts("doing it again");
+                info_count = 0;
+                singleton_args.self = this;
+                singleton_args.index = &info_count;
+                if (!singleton_args.buffer)
+                    singleton_args.buffer = new _draw_type[info_max];
+                mesh_task();
+
+                state.meshing = true;
+                needsUploaded = true;
+                needsMeshed = false;
+
+                state.changed = false;
                 return;
+            }
+
+
+            printf("info_count: %i, singleton_args.buffer: %p\n", info_count, singleton_args.buffer);
+            if (!singleton_args.buffer) {
+                return;
+            }
+
+            if (info_count == 0 && state.hasMeshDataToUpload) {
+                needsUploaded = false;
+                state.hasMeshDataToUpload = false;
+                return;
+            }
 
             glBindVertexArray(vao);
             glBindBuffer(GL_ARRAY_BUFFER, vbo);
 
-            glBufferData(GL_ARRAY_BUFFER, info_count * sizeof(*draw_buffer), draw_buffer, GL_STATIC_DRAW);
+            glBufferData(GL_ARRAY_BUFFER, info_count * sizeof(*singleton_args.buffer), singleton_args.buffer, GL_STATIC_DRAW);
 
             glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 28, 0);
             glEnableVertexAttribArray(0);
@@ -430,7 +540,16 @@ struct octree_chunk_t : public blockaccessor_t {
             glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 28, 20);
             glEnableVertexAttribArray(2);
 
-            needsMeshed = false;
+            needsUploaded = false;
+            state.hasMeshDataToUpload = false;
+            state.meshed = true;            
+
+            if (currentTask.status != TASK_RUNNING && singleton_args.buffer) {
+                delete singleton_args.buffer;
+                singleton_args.buffer = 0;
+            }
+            
+            currentTask.status = TASK_NOT_STARTED;
             //waitingOnThread = false;
             printf("Uploaded %i verticies\n", info_count);
         }
@@ -450,9 +569,26 @@ struct octree_chunk_t : public blockaccessor_t {
     }
 
     void render() {
+        if (!state.isGenerated()) {
+            if (size == minimum_octree_size) {
+                return;
+            } else {
+                state.generated = true;
+            }
+        }
+        //if (point)
+            state.printState();
+        //if (state.isGenerated())
+            //printf("status: %i, generated: %i, point: %p\n", currentTask.status, generated, point);
+        if (!state.isLoaded())
+            return;
+
+        if (!state.hasChanged() && !state.meshing && !state.meshed && !state.hasMeshDataToUpload)
+            state.changed = true;
         //if (!is_meshable)
         //    return;
 
+        // if task is going, dont render
         //if (!chunk->loaded) {
         //    fprintf(stderr, "Not yet loaded\n");
         //    continue;
@@ -480,15 +616,27 @@ struct octree_chunk_t : public blockaccessor_t {
 
         is_individually_rendering(); //Now in range
 
+        //printf("rendering");
+
         if (!needsToRender())
             return;
-        
-        if (waitingOnThread)
-            return;
 
-        if (needsMeshed) {
+        //if (currentTask.status != TASK_COMPLETED) {
+            //printf("task not complete");
+        //    return;
+        //}
+
+        //if (needsMeshed || needsUploaded)
+        //    mesh_entrypoint();
+        if (state.hasChanged() || state.hasMeshDataToUpload)
+            mesh_entrypoint();
+
+        
+
+        /*
+        if (needsMeshed || currentTask.status == TASK_COMPLETED) {
             if (meshPerFrame < 1)
-                mesh_entrypoint();
+                //mesh_task();
             if (info_count > 0)
                 meshPerFrame++;
             //waitingOnThread = true;
@@ -498,7 +646,7 @@ struct octree_chunk_t : public blockaccessor_t {
 			//workerTasks.push(task);
             //return;//come back when meshed
         }
-
+        */
 
         if (info_count == 0)
             return;
@@ -638,7 +786,7 @@ struct chunk_cache_t /*: public blockaccessor_t*/ {
         if (!chunk)
             return;
 
-        if (chunk->currentTask.status == TASK_RUNNING) {
+        if (chunk->currentTask.status == TASK_RUNNING || chunk->state.generating || chunk->state.meshing) {
             printf("Task for chunk is running, ignoring. Status: %i\n", chunk->currentTask.status);
             return;
         }
@@ -648,7 +796,7 @@ struct chunk_cache_t /*: public blockaccessor_t*/ {
             auto index = std::find(cache.begin(), cache.end(), chunk);
             cache.erase(index);
 
-            chunk->~octree_chunk_t();
+            //chunk->~octree_chunk_t();
         }
     }
 };
@@ -830,22 +978,22 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                                     puts("Could not resize buffers");
                                     //exit(1);b
                                     printf("%i/%i %p\n", *index, info_max, index);
-                                    break;
+                                    return;
                                 }
                                 break;
                                 float factor = (1.0f/16.0f);
                                 float textureAtlas[] = {1*factor,0*factor,2*factor,1*factor};
                                 //SHOWS ONLY ONES INDIVIDUALLY RENDERED BECAUSE OF APOSITION SHADER
-                                draw_buffer[*index].a.x = positionCube3[(l * 9) + (l1 * 3) + 0] + ofx;// + (float(ofx) / 128.0f);
-                                draw_buffer[*index].a.y = positionCube3[(l * 9) + (l1 * 3) + 1] + ofy;// + (float(ofy) / 128.0f);
-                                draw_buffer[*index].a.z = positionCube3[(l * 9) + (l1 * 3) + 2] + ofz;// + (float(ofz) / 128.0f);
+                                buffer[*index].a.x = positionCube3[(l * 9) + (l1 * 3) + 0] + ofx;// + (float(ofx) / 128.0f);
+                                buffer[*index].a.y = positionCube3[(l * 9) + (l1 * 3) + 1] + ofy;// + (float(ofy) / 128.0f);
+                                buffer[*index].a.z = positionCube3[(l * 9) + (l1 * 3) + 2] + ofz;// + (float(ofz) / 128.0f);
                                 
-                                draw_buffer[*index].a.u = textureAtlas[map[l % 2][l1][0]];
-                                draw_buffer[*index].a.v = textureAtlas[map[l % 2][l1][1]];
+                                buffer[*index].a.u = textureAtlas[map[l % 2][l1][0]];
+                                buffer[*index].a.v = textureAtlas[map[l % 2][l1][1]];
                                 
                                 
-                                draw_buffer[*index].a.i = 1.0f;
-                                draw_buffer[*index].a.a = 1.0f; //world brightness
+                                buffer[*index].a.i = 1.0f;
+                                buffer[*index].a.a = 1.0f; //world brightness
                                 
                                 (*index)++;
                             }
@@ -930,6 +1078,7 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                                     puts("Could not resize buffers");
                                     //exit(1);b
                                     printf("%i/%i %p\n", *index, info_max, index);
+                                    return;
                                 }
                             
                                 float factor = (1.0f/16.0f);
@@ -939,16 +1088,16 @@ void octree_chunk_t::mesh(_draw_type* buffer, int* index) {
                                                         fb.block->textureAtlas[2]*factor,
                                                         fb.block->textureAtlas[3]*factor};
 
-                                draw_buffer[*index].a.x = positionCube3[(l * 9) + (l1 * 3) + 0] * block_scale + float(x + ofx);
-                                draw_buffer[*index].a.y = positionCube3[(l * 9) + (l1 * 3) + 1] * block_scale + float(y + ofy);
-                                draw_buffer[*index].a.z = positionCube3[(l * 9) + (l1 * 3) + 2] * block_scale + float(z + ofz);
+                                buffer[*index].a.x = positionCube3[(l * 9) + (l1 * 3) + 0] * block_scale + float(x + ofx);
+                                buffer[*index].a.y = positionCube3[(l * 9) + (l1 * 3) + 1] * block_scale + float(y + ofy);
+                                buffer[*index].a.z = positionCube3[(l * 9) + (l1 * 3) + 2] * block_scale + float(z + ofz);
                                 
-                                draw_buffer[*index].a.u = fb.block->getTexture(l,l1,0) * factor;//textureAtlas[map[l % 2][l1][0]];
-                                draw_buffer[*index].a.v = fb.block->getTexture(l,l1,1) * factor;//textureAtlas[map[l % 2][l1][1]];
+                                buffer[*index].a.u = fb.block->getTexture(l,l1,0) * factor;//textureAtlas[map[l % 2][l1][0]];
+                                buffer[*index].a.v = fb.block->getTexture(l,l1,1) * factor;//textureAtlas[map[l % 2][l1][1]];
                                 
                                 
-                                draw_buffer[*index].a.i = ((float)fb.block->getFaceBrightness(_ofs,fb))/255.0f; //block brightness
-                                draw_buffer[*index].a.a = ((float)fb.block->getFaceBrightness(_ofs,fb))/255.0f; //world brightness
+                                buffer[*index].a.i = ((float)fb.block->getFaceBrightness(_ofs,fb))/255.0f; //block brightness
+                                buffer[*index].a.a = ((float)fb.block->getFaceBrightness(_ofs,fb))/255.0f; //world brightness
                                 
                                 (*index)++;
                             }
@@ -1143,7 +1292,7 @@ void start_game() {
     printf("\n");
     //exit(1);
 
-    worker *wrkr = new worker(3);
+    worker *wrkr = new worker(8);
     wrkr->start();
 
     block_t::air = new block_t(0, 0,0,0,0);
